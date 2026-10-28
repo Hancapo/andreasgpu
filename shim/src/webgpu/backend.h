@@ -6,6 +6,8 @@
 #include <windows.h>
 #include <d3d9.h>
 
+#include <vector>
+
 namespace agpu {
 class ResourceProxy;
 }
@@ -55,5 +57,9 @@ void DrawIndexedPrimitive(D3DPRIMITIVETYPE type, INT baseVertex, UINT minIndex, 
                           UINT primitiveCount);
 void StretchRect(IDirect3DSurface9* source, const RECT* sourceRect, IDirect3DSurface9* dest, const RECT* destRect);
 void Present();
+
+// Comparison harness: the next Present also reads the WebGPU back buffer back.
+void RequestCapture();
+bool TakeCapture(std::vector<uint8_t>* bgra, UINT* width, UINT* height);
 
 }  // namespace agpu::wgb

@@ -16,6 +16,7 @@ add_library(agpu_d3d9 SHARED
   src/widescreen.cpp
   src/mouse.cpp
   src/webgpu/backend.cpp
+  src/compare.cpp
   src/webgpu/ffshader.cpp
   src/webgpu/shader_translator.cpp
 )
@@ -26,7 +27,7 @@ target_compile_options(agpu_d3d9 PRIVATE /W4 /permissive-)
 # The real d3d9.dll is loaded by path at runtime; don't link against it.
 # webgpu_dawn.dll is delay-loaded: only touched when the mirror/backend starts, so
 # the game's startup DirectX check and mirror-off runs never load Dawn.
-target_link_libraries(agpu_d3d9 PRIVATE dawn_webgpu delayimp)
+target_link_libraries(agpu_d3d9 PRIVATE dawn_webgpu delayimp windowscodecs ole32)
 target_link_options(agpu_d3d9 PRIVATE /SAFESEH:NO /DELAYLOAD:webgpu_dawn.dll)
 add_custom_command(TARGET agpu_d3d9 POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${DAWN_RUNTIME_FILES} $<TARGET_FILE_DIR:agpu_d3d9>)

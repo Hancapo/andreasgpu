@@ -214,6 +214,11 @@ struct Backend {
   size_t warmupCount = 0;
   LARGE_INTEGER warmupStart{};
   bool warmupDone = true;
+
+  // Frame readback for the comparison harness (compare.h).
+  bool captureRequested = false;
+  std::vector<uint8_t> capture;  // BGRA8, tightly packed
+  UINT captureWidth = 0, captureHeight = 0;
 };
 Backend* g = nullptr;
 
@@ -1318,6 +1323,46 @@ bool ConfigureSurface() {
   return true;
 }
 
+// Copies the finished back buffer into `capture` (blocking; debug captures only).
+void ReadBackFrame() {
+  g->captureRequested = false;
+  uint32_t bytesPerRow = static_cast<uint32_t>(Align(g->width * 4, 256));
+  wgpu::BufferDescriptor desc{};
+  const size_t bufferSize = static_cast<size_t>(bytesPerRow) * g->height;
+  desc.size = bufferSize;
+  desc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
+  wgpu::Buffer buffer = g->device.CreateBuffer(&desc);
+  wgpu::TexelCopyTextureInfo from{};
+  from.texture = g->color;
+  wgpu::TexelCopyBufferInfo to{};
+  to.buffer = buffer;
+  to.layout.bytesPerRow = bytesPerRow;
+  to.layout.rowsPerImage = g->height;
+  wgpu::Extent3D size{g->width, g->height, 1};
+  wgpu::CommandEncoder encoder = g->device.CreateCommandEncoder();
+  encoder.CopyTextureToBuffer(&from, &to, &size);
+  wgpu::CommandBuffer commands = encoder.Finish();
+  g->queue.Submit(1, &commands);
+  bool mapped = false;
+  g->instance.WaitAny(buffer.MapAsync(wgpu::MapMode::Read, 0, bufferSize, wgpu::CallbackMode::WaitAnyOnly,
+                                      [&mapped](wgpu::MapAsyncStatus status, wgpu::StringView) {
+                                        mapped = status == wgpu::MapAsyncStatus::Success;
+                                      }),
+                      5'000'000'000ull);
+  if (!mapped) {
+    Logf("[webgpu] frame readback failed\n");
+    return;
+  }
+  auto data = static_cast<const uint8_t*>(buffer.GetConstMappedRange(0, bufferSize));
+  g->capture.resize(static_cast<size_t>(g->width) * g->height * 4);
+  for (UINT row = 0; row < g->height; ++row)
+    std::memcpy(g->capture.data() + static_cast<size_t>(row) * g->width * 4, data + static_cast<size_t>(row) * bytesPerRow,
+                g->width * 4);
+  buffer.Unmap();
+  g->captureWidth = g->width;
+  g->captureHeight = g->height;
+}
+
 // Records the blit (if the window can present), uploads the rings and submits.
 void SubmitFrame() {
   EnsureEncoder();
@@ -1359,6 +1404,7 @@ void SubmitFrame() {
   if (!g->vertexData.empty()) g->queue.WriteBuffer(g->vertexRing, 0, g->vertexData.data(), g->vertexData.size());
   g->queue.Submit(1, &commands);
   if (canPresent) g->surface.Present();
+  if (g->captureRequested) ReadBackFrame();
 }
 
 LRESULT CALLBACK MirrorWndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
@@ -1804,6 +1850,19 @@ void StretchRect(IDirect3DSurface9* source, const RECT* sourceRect, IDirect3DSur
   to.origin = {static_cast<uint32_t>(d.left), static_cast<uint32_t>(d.top), 0};
   wgpu::Extent3D size{static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1};
   g->encoder.CopyTextureToTexture(&from, &to, &size);
+}
+
+void RequestCapture() {
+  if (Active()) g->captureRequested = true;
+}
+
+bool TakeCapture(std::vector<uint8_t>* bgra, UINT* width, UINT* height) {
+  if (!Active() || g->capture.empty()) return false;
+  *bgra = std::move(g->capture);
+  g->capture.clear();
+  *width = g->captureWidth;
+  *height = g->captureHeight;
+  return true;
 }
 
 void Present() {

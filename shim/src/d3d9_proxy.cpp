@@ -7,6 +7,7 @@
 // SetTexture, SetSamplerState, ...) while the game runs, silently dropping patches.
 #include <intrin.h>
 
+#include "compare.h"
 #include "config.h"
 #include "display.h"
 #include "gen/d3d9_proxy.h"
@@ -172,8 +173,10 @@ HRESULT STDMETHODCALLTYPE DeviceProxy::Present(CONST RECT* pSourceRect, CONST RE
   KeepCursorInWindow(g_window);
   static const bool supported = IsSupportedBuild();
   if (supported) UpdateMouse(g_window);
+  compare::BeforePresent(real_, g_window);
   HRESULT hr = real_->Present(pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion);
   mirror::OnPresent();
+  compare::AfterPresent();
   return hr;
 }
 

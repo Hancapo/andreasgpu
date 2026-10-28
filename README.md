@@ -35,6 +35,22 @@ install (no ASI loader, SkyGfx, modloader or another d3d9.dll), then play. Outpu
 
 The summaries are rewritten every 3600 frames, on device Reset and at exit.
 
+## Configuration (`andreasgpu.ini` next to the dll)
+
+```
+[renderer]
+present=webgpu   ; what the game window shows: webgpu or d3d9 (default)
+mirror=1         ; with present=d3d9: also show the WebGPU frame in a second window
+compare=30       ; with mirror=1: compare both renderers every 30 s (F10 any time)
+record=1         ; write the draw-state logs above (costs CPU)
+```
+
+**Comparison harness:** with `present=d3d9` and `mirror=1` both renderers draw every frame.
+F10 (or `compare=N`) reads back that same frame from each and writes
+`andreasgpu_logs\compare\NNN_d3d9.png`, `NNN_webgpu.png` and `NNN_diff.png` (error ×4), and logs
+the mean error per channel, the share of pixels off by more than 16, PSNR and a 4×4 grid of
+mean errors to `andreasgpu.log`.
+
 ## Display fixes (in the shim)
 
 - **Borderless:** the game's exclusive fullscreen becomes a windowed D3D9 device on a borderless
