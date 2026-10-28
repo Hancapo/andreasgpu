@@ -9,6 +9,7 @@
 //    so recorded draws always see the data as it was when they were issued.
 #include "webgpu/backend.h"
 
+#include <intrin.h>
 #include <webgpu/webgpu_cpp.h>
 
 #include <algorithm>
@@ -21,11 +22,13 @@
 #include <unordered_map>
 #include <vector>
 
+#include "config.h"
 #include "log.h"
 #include "resources.h"
 #include "webgpu/ffshader.h"
 #include "webgpu/shader_translator.h"
 #include "webgpu/mirror.h"
+#include "webgpu/overlay.h"
 
 namespace agpu::wgb {
 namespace {
@@ -126,6 +129,53 @@ struct PipelineKey {
 };
 #pragma pack(pop)
 
+// ---------------------------------------------------------------------------
+// Opt-in CPU profiler (andreasgpu.ini: profile=1). Sections accumulate rdtsc ticks,
+// converted to ms per frame against QueryPerformanceCounter when logged.
+
+enum ProfSection {
+  kProfDrawCall,  // whole DrawPrimitive / DrawIndexedPrimitive
+  kProfKey,       // decl lookup, pass, BuildKey
+  kProfPipeline,  // pipeline lookup
+  kProfUniforms,  // FillUniforms + staging (and VS constants)
+  kProfVertices,  // dynamic vertex staging
+  kProfBindGroup,
+  kProfEncode,    // render pass commands
+  kProfBufferUpload,   // BufferWritten
+  kProfTextureUpload,  // TextureWritten
+  kProfSubmit,    // SubmitFrame: ring uploads, blit, Submit, surface Present
+  kProfEvents,    // ProcessEvents
+  kProfCount
+};
+const char* const kProfNames[kProfCount] = {"draw calls", "key", "pipeline", "uniforms", "vertices", "bindgroup",
+                                            "encode", "buffers", "textures", "submit", "events"};
+struct Profiler {
+  bool on = false;
+  uint64_t ticks[kProfCount] = {};
+  uint64_t startTsc = 0;
+  LARGE_INTEGER startQpc{};
+} g_prof;
+
+struct ProfScope {
+  ProfSection section;
+  uint64_t start;
+  explicit ProfScope(ProfSection s) : section(s), start(g_prof.on ? __rdtsc() : 0) {}
+  ~ProfScope() {
+    if (g_prof.on) g_prof.ticks[section] += __rdtsc() - start;
+  }
+};
+
+// Consecutive sections inside one function: Mark() charges the time since the last mark.
+struct ProfLap {
+  uint64_t last = g_prof.on ? __rdtsc() : 0;
+  void Mark(ProfSection s) {
+    if (!g_prof.on) return;
+    uint64_t now = __rdtsc();
+    g_prof.ticks[s] += now - last;
+    last = now;
+  }
+};
+
 template <class T>
 struct PodHash {
   size_t operator()(const T& k) const {
@@ -198,6 +248,22 @@ struct Backend {
   bool passOpen = false;
   UINT passWidth = 0, passHeight = 0;
   bool passHasDepth = false;
+  // Last values sent to the current render pass, to skip redundant commands.
+  struct {
+    WGPURenderPipeline pipeline;
+    WGPUBindGroup bindGroup;
+    uint32_t offsets[2];
+    WGPUBuffer vertexBuffer[4];
+    uint64_t vertexOffset[4];
+    WGPUBuffer indexBuffer;
+    float viewport[6];
+    bool viewportSet, stencilSet, blendSet;
+    DWORD stencilRef, blendFactor;
+  } passCache{};
+  // Last staged uniform block / vertex shader constants this frame (reused when unchanged).
+  UniformBlock lastUniforms{};
+  size_t lastUniformOffset = SIZE_MAX, lastConstantsOffset = SIZE_MAX;
+  bool vsConstDirty = true;
 
   // Presentation
   wgpu::RenderPipeline blitPipeline;
@@ -211,6 +277,10 @@ struct Backend {
   } stats;
   unsigned frame = 0;
   LARGE_INTEGER lastPresent{};
+  // FPS counter (overlay.h), refreshed every 500 ms.
+  bool fpsOverlay = false;
+  LARGE_INTEGER fpsStart{};
+  unsigned fpsFrames = 0;
 
   // Persistent pipeline cache (andreasgpu_cache/pipelines.bin).
   FILE* cacheFile = nullptr;
@@ -218,6 +288,12 @@ struct Backend {
   size_t warmupCount = 0;
   LARGE_INTEGER warmupStart{};
   bool warmupDone = true;
+
+  // Frame trace (RequestTrace): armed for the next frame, written at its Present.
+  std::wstring traceName;
+  bool traceArmed = false, tracing = false;
+  std::string trace;
+  unsigned traceDraw = 0;
 
   // Frame readback for the comparison harness (compare.h).
   bool captureRequested = false;
@@ -441,6 +517,20 @@ struct V { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
   wgpu::SamplerDescriptor samplerDesc{};
   samplerDesc.magFilter = samplerDesc.minFilter = wgpu::FilterMode::Linear;
   g->blitSampler = g->device.CreateSampler(&samplerDesc);
+  // A broken overlay pipeline would invalidate every frame's commands: verify it.
+  if (GetConfig().fps) {
+    g->device.PushErrorScope(wgpu::ErrorFilter::Validation);
+    bool ok = overlay::Init(g->device, g->surfaceConfig.format);
+    g->instance.WaitAny(g->device.PopErrorScope(wgpu::CallbackMode::WaitAnyOnly,
+                                                [&ok](wgpu::PopErrorScopeStatus, wgpu::ErrorType type,
+                                                      wgpu::StringView message) {
+                                                  if (type == wgpu::ErrorType::NoError) return;
+                                                  ok = false;
+                                                  Logf("[overlay] disabled: %s\n", Str(message).c_str());
+                                                }),
+                        UINT64_MAX);
+    g->fpsOverlay = ok;
+  }
 }
 
 void EnsureRings() {
@@ -631,6 +721,7 @@ void BeginPass(DWORD clearFlags, D3DCOLOR color, float z, DWORD stencil) {
   desc.depthStencilAttachment = useDepth ? &depthAttachment : nullptr;
   g->pass = g->encoder.BeginRenderPass(&desc);
   g->passOpen = true;
+  g->passCache = {};
   g->passWidth = width;
   g->passHeight = height;
   g->passHasDepth = useDepth;
@@ -1194,6 +1285,39 @@ size_t Stage(std::vector<uint8_t>& ring, size_t capacity, bool& grow, const void
   return offset;
 }
 
+// One line per draw while tracing a frame.
+void TraceDraw(const Decl& decl, D3DPRIMITIVETYPE type, UINT firstVertex, UINT count, const char* outcome) {
+  const State& s = g->state;
+  const DWORD* rs = s.rs;
+  char line[512];
+  int n = snprintf(line, sizeof(line), "%4u %-9s type=%u first=%u count=%u pre=%d", g->traceDraw++, outcome,
+                   static_cast<unsigned>(type), firstVertex, count, decl.pretransformed);
+  // First vertex position (dynamic streams only: their bytes are in the shadow).
+  for (const VertexElement& e : decl.elements) {
+    if (e.slot != kSlotPosition) continue;
+    const State::Stream& st = s.streams[e.stream];
+    Buffer* b = BufferOf(st.buffer);
+    size_t at = st.offset + static_cast<size_t>(firstVertex) * st.stride + e.offset;
+    if (b && b->dynamic && at + 16 <= b->shadow.size()) {
+      float p[4];
+      std::memcpy(p, b->shadow.data() + at, 16);
+      n += snprintf(line + n, sizeof(line) - n, " pos=(%.1f %.1f %.4f %.4f)", p[0], p[1], p[2],
+                    decl.pretransformed ? p[3] : 1.0f);
+    }
+  }
+  Texture* t0 = TextureOf(s.textures[0]);
+  n += snprintf(line + n, sizeof(line) - n,
+                " | z=%lu zw=%lu zf=%lu cw=%lX blend=%lu %lu/%lu at=%lu af=%lu ref=%lu sten=%lu | tex0=%u %ux%u"
+                " | vp=%lu,%lu %lux%lu z%.2f-%.2f",
+                rs[D3DRS_ZENABLE], rs[D3DRS_ZWRITEENABLE], rs[D3DRS_ZFUNC], rs[D3DRS_COLORWRITEENABLE],
+                rs[D3DRS_ALPHABLENDENABLE], rs[D3DRS_SRCBLEND], rs[D3DRS_DESTBLEND], rs[D3DRS_ALPHATESTENABLE],
+                rs[D3DRS_ALPHAFUNC], rs[D3DRS_ALPHAREF], rs[D3DRS_STENCILENABLE], t0 ? t0->id : 0,
+                t0 ? t0->width : 0, t0 ? t0->height : 0, s.viewport.X, s.viewport.Y, s.viewport.Width,
+                s.viewport.Height, s.viewport.MinZ, s.viewport.MaxZ);
+  n += snprintf(line + n, sizeof(line) - n, " | pass %ux%u depth=%d", g->passWidth, g->passHeight, g->passHasDepth);
+  g->trace.append(line, n).append("\n");
+}
+
 // Common draw path. `firstVertex`/`vertexCount` give the absolute vertex range the
 // draw reads (used to copy dynamic vertex data); `indices` is either nullptr
 // (non-indexed) or the 16-bit indices to draw, relative to `firstVertex`.
@@ -1201,38 +1325,62 @@ void Draw(D3DPRIMITIVETYPE type, UINT firstVertex, UINT vertexCount, const uint1
           ResourceProxy* staticIndexBuffer, UINT staticIndexStart, INT staticBaseVertex) {
   State& s = g->state;
   ++g->stats.draws;
+  ProfLap lap;
   auto declIt = g->decls.find(s.decl);
   if (declIt == g->decls.end()) {
     ++g->stats.skippedOther;
+    if (g->tracing) g->trace += "     no-decl\n";
     return;
   }
   const Decl& decl = declIt->second;
+  struct TraceOnExit {
+    const Decl& decl;
+    D3DPRIMITIVETYPE type;
+    UINT first, count;
+    const char* outcome = "dropped";
+    ~TraceOnExit() {
+      if (g->tracing) TraceDraw(decl, type, first, count, outcome);
+    }
+  } traceExit{decl, type, firstVertex, indices ? indexCount : vertexCount};
   EnsurePass();
   bool indexed = indices || staticIndexBuffer;
   PipelineKey key;
   if (!BuildKey(decl, type, indexed, key)) {
+    traceExit.outcome = "no-key";
     ++(s.vertexShader || s.pixelShader ? g->stats.skippedShader : g->stats.skippedOther);
     return;
   }
+  lap.Mark(kProfKey);
   uint32_t streamMask = 0;
   for (int i = 0; i < key.attrCount; ++i) streamMask |= 1u << key.attrs[i].stream;
   wgpu::RenderPipeline pipeline = GetPipeline(key);
+  lap.Mark(kProfPipeline);
   if (!pipeline) {
+    traceExit.outcome = "compiling";
     ++g->stats.waitingForPipeline;
     return;
   }
 
   UniformBlock uniforms{};
   FillUniforms(uniforms);
-  size_t uniformOffset =
-      Stage(g->uniformData, g->uniformCapacity, g->growUniform, &uniforms, sizeof(uniforms), 256);
-  if (uniformOffset == SIZE_MAX) return;
+  size_t uniformOffset = g->lastUniformOffset;
+  if (uniformOffset == SIZE_MAX || std::memcmp(&uniforms, &g->lastUniforms, sizeof(uniforms)) != 0) {
+    uniformOffset = Stage(g->uniformData, g->uniformCapacity, g->growUniform, &uniforms, sizeof(uniforms), 256);
+    if (uniformOffset == SIZE_MAX) return;
+    g->lastUniforms = uniforms;
+    g->lastUniformOffset = uniformOffset;
+  }
   size_t constantsOffset = 0;
   if (s.vertexShader) {
-    constantsOffset =
-        Stage(g->uniformData, g->uniformCapacity, g->growUniform, s.vsConst, kVertexConstantsSize, 256);
-    if (constantsOffset == SIZE_MAX) return;
+    if (g->vsConstDirty || g->lastConstantsOffset == SIZE_MAX) {
+      g->lastConstantsOffset =
+          Stage(g->uniformData, g->uniformCapacity, g->growUniform, s.vsConst, kVertexConstantsSize, 256);
+      if (g->lastConstantsOffset == SIZE_MAX) return;
+      g->vsConstDirty = false;
+    }
+    constantsOffset = g->lastConstantsOffset;
   }
+  lap.Mark(kProfUniforms);
 
   // Vertex streams. Static buffers are addressed with absolute vertex indices; when
   // every stream is dynamic only the used range is copied and indices are rebased.
@@ -1269,41 +1417,76 @@ void Draw(D3DPRIMITIVETYPE type, UINT firstVertex, UINT vertexCount, const uint1
     bindings[stream] = {g->vertexRing, anyStatic ? at + st.offset : at};
   }
 
+  lap.Mark(kProfVertices);
   wgpu::BindGroup bindGroup = GetBindGroup(key.ff);
-  wgpu::RenderPassEncoder& pass = g->pass;
-  pass.SetPipeline(pipeline);
-  uint32_t dynamicOffsets[2] = {static_cast<uint32_t>(uniformOffset), static_cast<uint32_t>(constantsOffset)};
-  pass.SetBindGroup(0, bindGroup, 2, dynamicOffsets);
-  for (int stream = 0; stream < 4; ++stream)
-    if (streamMask & (1u << stream)) pass.SetVertexBuffer(stream, bindings[stream].buffer, bindings[stream].offset);
+  lap.Mark(kProfBindGroup);
   const D3DVIEWPORT9& vp = s.viewport;
   float vx = static_cast<float>(std::min<DWORD>(vp.X, g->passWidth));
   float vy = static_cast<float>(std::min<DWORD>(vp.Y, g->passHeight));
   float vw = std::min(static_cast<float>(vp.Width), g->passWidth - vx);
   float vh = std::min(static_cast<float>(vp.Height), g->passHeight - vy);
   if (vw <= 0 || vh <= 0) return;
-  pass.SetViewport(vx, vy, vw, vh, std::clamp(vp.MinZ, 0.0f, 1.0f), std::clamp(vp.MaxZ, 0.0f, 1.0f));
-  if (key.stencilEnable) pass.SetStencilReference(s.rs[D3DRS_STENCILREF] & 0xFF);
-  if (key.blendEnable) {
+  // Only send what changed since the previous draw in this pass.
+  wgpu::RenderPassEncoder& pass = g->pass;
+  auto& pc = g->passCache;
+  if (pc.pipeline != pipeline.Get()) {
+    pass.SetPipeline(pipeline);
+    pc.pipeline = pipeline.Get();
+  }
+  uint32_t dynamicOffsets[2] = {static_cast<uint32_t>(uniformOffset), static_cast<uint32_t>(constantsOffset)};
+  if (pc.bindGroup != bindGroup.Get() || std::memcmp(pc.offsets, dynamicOffsets, sizeof(dynamicOffsets)) != 0) {
+    pass.SetBindGroup(0, bindGroup, 2, dynamicOffsets);
+    pc.bindGroup = bindGroup.Get();
+    std::memcpy(pc.offsets, dynamicOffsets, sizeof(dynamicOffsets));
+  }
+  for (int stream = 0; stream < 4; ++stream) {
+    if (!(streamMask & (1u << stream))) continue;
+    const Binding& bd = bindings[stream];
+    if (pc.vertexBuffer[stream] == bd.buffer.Get() && pc.vertexOffset[stream] == bd.offset) continue;
+    pass.SetVertexBuffer(stream, bd.buffer, bd.offset);
+    pc.vertexBuffer[stream] = bd.buffer.Get();
+    pc.vertexOffset[stream] = bd.offset;
+  }
+  float viewport[6] = {vx, vy, vw, vh, std::clamp(vp.MinZ, 0.0f, 1.0f), std::clamp(vp.MaxZ, 0.0f, 1.0f)};
+  if (!pc.viewportSet || std::memcmp(pc.viewport, viewport, sizeof(viewport)) != 0) {
+    pass.SetViewport(viewport[0], viewport[1], viewport[2], viewport[3], viewport[4], viewport[5]);
+    std::memcpy(pc.viewport, viewport, sizeof(viewport));
+    pc.viewportSet = true;
+  }
+  DWORD stencilRef = s.rs[D3DRS_STENCILREF] & 0xFF;
+  if (key.stencilEnable && (!pc.stencilSet || pc.stencilRef != stencilRef)) {
+    pass.SetStencilReference(stencilRef);
+    pc.stencilRef = stencilRef;
+    pc.stencilSet = true;
+  }
+  if (key.blendEnable && (!pc.blendSet || pc.blendFactor != s.rs[D3DRS_BLENDFACTOR])) {
     float bf[4];
     ColorToFloats(s.rs[D3DRS_BLENDFACTOR], bf);
     wgpu::Color c{bf[0], bf[1], bf[2], bf[3]};
     pass.SetBlendConstant(&c);
+    pc.blendFactor = s.rs[D3DRS_BLENDFACTOR];
+    pc.blendSet = true;
   }
 
   if (staticIndexBuffer) {
     Buffer* ib = BufferOf(staticIndexBuffer);
-    pass.SetIndexBuffer(ib->gpu, wgpu::IndexFormat::Uint16);
+    if (pc.indexBuffer != ib->gpu.Get()) {
+      pass.SetIndexBuffer(ib->gpu, wgpu::IndexFormat::Uint16);
+      pc.indexBuffer = ib->gpu.Get();
+    }
     pass.DrawIndexed(indexCount, 1, staticIndexStart, staticBaseVertex, 0);
   } else if (indices) {
     size_t at = Stage(g->vertexData, g->vertexCapacity, g->growVertex, indices, indexCount * 2, 4);
     if (at == SIZE_MAX) return;
     pass.SetIndexBuffer(g->vertexRing, wgpu::IndexFormat::Uint16, at, Align(indexCount * 2, 4));
+    pc.indexBuffer = nullptr;
     pass.DrawIndexed(indexCount, 1, 0, anyStatic ? static_cast<INT>(firstVertex) : 0, 0);
   } else {
     pass.Draw(vertexCount, 1, anyStatic ? firstVertex : 0, 0);
   }
   ++g->stats.drawn;
+  traceExit.outcome = "drawn";
+  lap.Mark(kProfEncode);
 }
 
 // ---------------------------------------------------------------------------
@@ -1409,6 +1592,7 @@ void SubmitFrame() {
     pass.SetPipeline(g->blitPipeline);
     pass.SetBindGroup(0, bindGroup);
     pass.Draw(3);
+    if (g->fpsOverlay) overlay::Draw(g->queue, pass, g->surfaceConfig.width, g->surfaceConfig.height);
     pass.End();
   }
   wgpu::CommandBuffer commands = g->encoder.Finish();
@@ -1556,6 +1740,7 @@ void TextureCreated(ResourceProxy* proxy, UINT width, UINT height, UINT levels, 
 
 void TextureWritten(ResourceProxy* proxy, UINT level, const D3DLOCKED_RECT& locked, const RECT* rect) {
   if (!Active()) return;
+  ProfScope prof(kProfTextureUpload);
   Texture* t = TextureOf(proxy);
   if (!t || !t->texture || level >= t->levels || t->renderTarget) return;
   UINT levelWidth = std::max<UINT>(t->width >> level, 1), levelHeight = std::max<UINT>(t->height >> level, 1);
@@ -1617,12 +1802,21 @@ void BufferCreated(ResourceProxy* proxy, UINT length, DWORD usage, D3DPOOL pool,
   proxy->backend = static_cast<BackendObject*>(b.release());
 }
 
-void BufferWritten(ResourceProxy* proxy, UINT offset, UINT size, const void* data) {
+void* BufferShadow(ResourceProxy* proxy, UINT offset) {
+  if (!Active()) return nullptr;
+  Buffer* b = BufferOf(proxy);
+  if (!b || b->shadow.empty() || offset >= b->length) return nullptr;
+  return b->shadow.data() + offset;
+}
+
+void BufferWritten(ResourceProxy* proxy, UINT offset, UINT size, const void* data, void* forward) {
   if (!Active()) return;
+  ProfScope prof(kProfBufferUpload);
   Buffer* b = BufferOf(proxy);
   if (!b || offset >= b->length) return;
   if (size == 0 || offset + size > b->length) size = b->length - offset;
-  if (!b->shadow.empty()) std::memcpy(b->shadow.data() + offset, data, size);
+  if (forward) std::memcpy(forward, data, size);  // sequential writes: fine for write-combined memory
+  if (!b->shadow.empty() && data != b->shadow.data() + offset) std::memcpy(b->shadow.data() + offset, data, size);
   if (b->gpu) {
     // WriteBuffer needs 4-byte alignment; the bytes around the locked range belong
     // to the same D3D buffer.
@@ -1746,6 +1940,7 @@ void SetVertexShaderConstantF(UINT start, const float* data, UINT count) {
   if (!Active() || !data || start >= 256) return;
   count = std::min<UINT>(count, 256 - start);
   std::memcpy(g->state.vsConst[start], data, count * 16);
+  g->vsConstDirty = true;
 }
 
 void SetPixelShaderConstantF(UINT start, const float* data, UINT count) {
@@ -1793,11 +1988,16 @@ void SetDepthStencilSurface(IDirect3DSurface9* surface) {
 
 void Clear(DWORD flags, D3DCOLOR color, float z, DWORD stencil) {
   if (!Active()) return;
+  if (g->tracing) {
+    char line[96];
+    g->trace.append(line, snprintf(line, sizeof(line), "     clear flags=%lX color=%08lX z=%.3f\n", flags, color, z));
+  }
   BeginPass(flags, color, z, stencil);
 }
 
 void DrawPrimitive(D3DPRIMITIVETYPE type, UINT startVertex, UINT primitiveCount) {
   if (!Active()) return;
+  ProfScope prof(kProfDrawCall);
   UINT count = VertexCountFor(type, primitiveCount);
   if (!count) return;
   if (type == D3DPT_TRIANGLEFAN) {
@@ -1817,6 +2017,7 @@ void DrawPrimitive(D3DPRIMITIVETYPE type, UINT startVertex, UINT primitiveCount)
 void DrawIndexedPrimitive(D3DPRIMITIVETYPE type, INT baseVertex, UINT minIndex, UINT numVertices, UINT startIndex,
                           UINT primitiveCount) {
   if (!Active()) return;
+  ProfScope prof(kProfDrawCall);
   Buffer* ib = BufferOf(g->state.indices);
   UINT count = VertexCountFor(type, primitiveCount);
   if (!ib || !count) return;
@@ -1899,6 +2100,12 @@ void MovieStarting() {
   g->surfaceHidden = true;
 }
 
+void RequestTrace(const wchar_t* name) {
+  if (!Active()) return;
+  g->traceName = name;
+  g->traceArmed = true;
+}
+
 void RequestCapture() {
   if (Active()) g->captureRequested = true;
 }
@@ -1912,14 +2119,54 @@ bool TakeCapture(std::vector<uint8_t>* bgra, UINT* width, UINT* height) {
   return true;
 }
 
+// Logs ms per frame for every section over the last 600 frames.
+void ReportProfile(LARGE_INTEGER now, LARGE_INTEGER freq) {
+  uint64_t tsc = __rdtsc();
+  double ms = (now.QuadPart - g_prof.startQpc.QuadPart) * 1000.0 / freq.QuadPart;
+  double ticksPerMs = ms > 0 ? (tsc - g_prof.startTsc) / ms : 1.0;
+  if (g_prof.startTsc) {
+    char line[512];
+    int n = snprintf(line, sizeof(line), "[profile] ms/frame: frame %.2f |", ms / 600.0);
+    double ours = 0;
+    for (int i = 0; i < kProfCount; ++i) {
+      double v = g_prof.ticks[i] / ticksPerMs / 600.0;
+      if (i == kProfDrawCall || i >= kProfBufferUpload) ours += v;
+      n += snprintf(line + n, sizeof(line) - n, " %s %.2f", kProfNames[i], v);
+    }
+    snprintf(line + n, sizeof(line) - n, " | backend %.2f, rest %.2f\n", ours, ms / 600.0 - ours);
+    Logf("%s", line);
+  }
+  std::memset(g_prof.ticks, 0, sizeof(g_prof.ticks));
+  g_prof.startTsc = tsc;
+  g_prof.startQpc = now;
+}
+
 void Present() {
   if (!Active()) return;
-  EndPass();
-  SubmitFrame();
-  g->uniformData.clear();
-  g->vertexData.clear();
-  EnsureRings();  // grows after submission so recorded draws keep their buffers
-  g->instance.ProcessEvents();
+  if (g->tracing) {
+    WriteLogFile(g->traceName.c_str(), g->trace.data(), g->trace.size());
+    Logf("[trace] %u draws written to %ls\n", g->traceDraw, g->traceName.c_str());
+    g->tracing = false;
+    g->trace.clear();
+  }
+  if (g->traceArmed) {
+    g->traceArmed = false;
+    g->tracing = true;
+    g->traceDraw = 0;
+  }
+  {
+    ProfScope prof(kProfSubmit);
+    EndPass();
+    SubmitFrame();
+    g->uniformData.clear();
+    g->vertexData.clear();
+    g->lastUniformOffset = g->lastConstantsOffset = SIZE_MAX;
+    EnsureRings();  // grows after submission so recorded draws keep their buffers
+  }
+  {
+    ProfScope prof(kProfEvents);
+    g->instance.ProcessEvents();
+  }
   LARGE_INTEGER now, freq;
   QueryPerformanceCounter(&now);
   QueryPerformanceFrequency(&freq);
@@ -1930,6 +2177,18 @@ void Present() {
     if (ms > 25.0) ++g->stats.slowFrames;
   }
   g->lastPresent = now;
+  ++g->fpsFrames;
+  double fpsMs = (now.QuadPart - g->fpsStart.QuadPart) * 1000.0 / freq.QuadPart;
+  if (g->fpsOverlay && (fpsMs >= 500.0 || !g->fpsStart.QuadPart)) {
+    char text[32];
+    if (g->fpsStart.QuadPart)
+      snprintf(text, sizeof(text), "%.0f FPS %.1f MS", g->fpsFrames * 1000.0 / fpsMs, fpsMs / g->fpsFrames);
+    else
+      text[0] = 0;
+    overlay::SetText(text);
+    g->fpsStart = now;
+    g->fpsFrames = 0;
+  }
   if (!g->warmupDone) {
     size_t compiling = 0;
     for (const auto& [key, pipeline] : g->pipelines) compiling += pipeline ? 0 : 1;
@@ -1945,6 +2204,7 @@ void Present() {
          g->frame, g->stats.totalFrameMs / 600.0, g->stats.worstFrameMs, g->stats.slowFrames, g->stats.draws,
          g->stats.drawn, g->stats.waitingForPipeline, g->stats.skippedShader, g->stats.skippedOther,
          g->stats.pipelinesCreated, g->pipelines.size(), g->bindGroups.size(), g->stats.textureUploads);
+    if (g_prof.on) ReportProfile(now, freq);
     LogFlush();
     g->stats = {};
   }
@@ -2018,6 +2278,7 @@ bool Start(HWND presentWindow, bool vsync) {
   CreateFixedObjects();
   EnsureRings();
   g->active = true;
+  g_prof.on = GetConfig().profile;
   WarmUpPipelineCache();
   Logf("[webgpu] started: presenting in %s, %ux%u, present mode %d\n",
        presentWindow ? "the game window" : "the mirror window", g->surfaceConfig.width, g->surfaceConfig.height,

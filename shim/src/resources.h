@@ -36,6 +36,7 @@ class ResourceProxy {
     bool hasRect;
     UINT offset, size;
     void* data;
+    void* shadow = nullptr;  // buffers: where the game writes (wgb::BufferShadow)
   };
   std::vector<PendingLock> locks;
 

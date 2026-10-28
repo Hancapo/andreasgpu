@@ -21,6 +21,8 @@ const Config& GetConfig() {
     c.presentWebGPU = _wcsicmp(present, L"webgpu") == 0;
     c.record = GetPrivateProfileIntW(L"renderer", L"record", 0, ini.c_str()) != 0;
     c.mirror = !c.presentWebGPU && GetPrivateProfileIntW(L"renderer", L"mirror", 0, ini.c_str()) != 0;
+    c.fps = GetPrivateProfileIntW(L"renderer", L"fps", 1, ini.c_str()) != 0;
+    c.profile = GetPrivateProfileIntW(L"renderer", L"profile", 0, ini.c_str()) != 0;
     c.compareSeconds = GetPrivateProfileIntW(L"renderer", L"compare", 0, ini.c_str());
     return c;
   }();

@@ -144,7 +144,7 @@ void Compare(Image& d3d9, Image& webgpu) {
 
 void BeforePresent(IDirect3DDevice9* real, HWND window) {
   const Config& config = GetConfig();
-  if (!config.mirror || !wgb::Active()) return;
+  if (!wgb::Active()) return;
   bool due = false;
   // F10 (edge-triggered) while the game has focus.
   static bool keyWasDown = false;
@@ -152,16 +152,22 @@ void BeforePresent(IDirect3DDevice9* real, HWND window) {
   due |= keyDown && !keyWasDown;
   keyWasDown = keyDown;
   ULONGLONG now = GetTickCount64();
-  if (config.compareSeconds > 0) {
+  if (config.mirror && config.compareSeconds > 0) {
     if (!g_lastAuto) g_lastAuto = now;
     if (now - g_lastAuto >= config.compareSeconds * 1000ull) {
       due = true;
       g_lastAuto = now;
     }
   }
-  if (!due || !ReadBackBuffer(real, &g_d3d9)) return;
+  if (!due) return;
+  // Without mirror mode the D3D9 device draws nothing: save the WebGPU frame only.
+  g_d3d9 = {};
+  if (config.mirror && !ReadBackBuffer(real, &g_d3d9)) return;
   g_pending = true;
   wgb::RequestCapture();
+  wchar_t trace[48];
+  swprintf(trace, 48, L"compare\\%03u_draws.txt", g_index);
+  wgb::RequestTrace(trace);
 }
 
 void AfterPresent() {
@@ -170,6 +176,16 @@ void AfterPresent() {
   Image webgpu;
   if (!wgb::TakeCapture(&webgpu.bgra, &webgpu.width, &webgpu.height)) {
     Logf("[compare] no WebGPU frame was captured\n");
+    return;
+  }
+  if (g_d3d9.bgra.empty()) {
+    for (size_t i = 3; i < webgpu.bgra.size(); i += 4) webgpu.bgra[i] = 255;
+    std::wstring dir = LogPath(L"compare");
+    CreateDirectoryW(dir.c_str(), nullptr);
+    wchar_t name[32];
+    swprintf(name, 32, L"\\%03u_webgpu.png", g_index);
+    if (WritePng(dir + name, webgpu)) Logf("[compare] %03u: saved the WebGPU frame\n", g_index);
+    ++g_index;
     return;
   }
   Compare(g_d3d9, webgpu);

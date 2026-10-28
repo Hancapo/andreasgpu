@@ -250,14 +250,20 @@ ULONG STDMETHODCALLTYPE VertexBuffer9Proxy::Release() { return real_->Release();
 HRESULT STDMETHODCALLTYPE VertexBuffer9Proxy::GetDevice(IDirect3DDevice9** ppDevice) { return ReturnDevice(ppDevice); }
 HRESULT STDMETHODCALLTYPE VertexBuffer9Proxy::Lock(UINT OffsetToLock, UINT SizeToLock, void** ppbData, DWORD Flags) {
   HRESULT hr = real_->Lock(OffsetToLock, SizeToLock, ppbData, Flags);
-  if (SUCCEEDED(hr) && backend && !(Flags & D3DLOCK_READONLY))
-    locks.push_back({0, {}, {}, false, OffsetToLock, SizeToLock, *ppbData});
+  if (SUCCEEDED(hr) && backend && !(Flags & D3DLOCK_READONLY)) {
+    void* shadow = wgb::BufferShadow(this, OffsetToLock);
+    locks.push_back({0, {}, {}, false, OffsetToLock, SizeToLock, *ppbData, shadow});
+    if (shadow) *ppbData = shadow;
+  }
   return hr;
 }
 HRESULT STDMETHODCALLTYPE VertexBuffer9Proxy::Unlock() {
   if (!locks.empty()) {
     const PendingLock& lock = locks.back();
-    wgb::BufferWritten(this, lock.offset, lock.size, lock.data);
+    if (lock.shadow)
+      wgb::BufferWritten(this, lock.offset, lock.size, lock.shadow, lock.data);
+    else
+      wgb::BufferWritten(this, lock.offset, lock.size, lock.data, nullptr);
     locks.pop_back();
   }
   return real_->Unlock();
@@ -272,14 +278,20 @@ ULONG STDMETHODCALLTYPE IndexBuffer9Proxy::Release() { return real_->Release(); 
 HRESULT STDMETHODCALLTYPE IndexBuffer9Proxy::GetDevice(IDirect3DDevice9** ppDevice) { return ReturnDevice(ppDevice); }
 HRESULT STDMETHODCALLTYPE IndexBuffer9Proxy::Lock(UINT OffsetToLock, UINT SizeToLock, void** ppbData, DWORD Flags) {
   HRESULT hr = real_->Lock(OffsetToLock, SizeToLock, ppbData, Flags);
-  if (SUCCEEDED(hr) && backend && !(Flags & D3DLOCK_READONLY))
-    locks.push_back({0, {}, {}, false, OffsetToLock, SizeToLock, *ppbData});
+  if (SUCCEEDED(hr) && backend && !(Flags & D3DLOCK_READONLY)) {
+    void* shadow = wgb::BufferShadow(this, OffsetToLock);
+    locks.push_back({0, {}, {}, false, OffsetToLock, SizeToLock, *ppbData, shadow});
+    if (shadow) *ppbData = shadow;
+  }
   return hr;
 }
 HRESULT STDMETHODCALLTYPE IndexBuffer9Proxy::Unlock() {
   if (!locks.empty()) {
     const PendingLock& lock = locks.back();
-    wgb::BufferWritten(this, lock.offset, lock.size, lock.data);
+    if (lock.shadow)
+      wgb::BufferWritten(this, lock.offset, lock.size, lock.shadow, lock.data);
+    else
+      wgb::BufferWritten(this, lock.offset, lock.size, lock.data, nullptr);
     locks.pop_back();
   }
   return real_->Unlock();

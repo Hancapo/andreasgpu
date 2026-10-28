@@ -16,6 +16,7 @@ add_library(agpu_d3d9 SHARED
   src/widescreen.cpp
   src/mouse.cpp
   src/webgpu/backend.cpp
+  src/webgpu/overlay.cpp
   src/compare.cpp
   src/webgpu/ffshader.cpp
   src/webgpu/shader_translator.cpp

@@ -23,7 +23,13 @@ void ResetDevice(UINT backBufferWidth, UINT backBufferHeight, BOOL autoDepthSten
 void TextureCreated(ResourceProxy* texture, UINT width, UINT height, UINT levels, DWORD usage, D3DFORMAT format);
 void TextureWritten(ResourceProxy* texture, UINT level, const D3DLOCKED_RECT& locked, const RECT* rect);
 void BufferCreated(ResourceProxy* buffer, UINT length, DWORD usage, D3DPOOL pool, bool index, D3DFORMAT indexFormat);
-void BufferWritten(ResourceProxy* buffer, UINT offset, UINT size, const void* data);
+// Dynamic and index buffers keep a CPU shadow; Lock hands the game a pointer into
+// it (cached memory) instead of the D3D9 buffer, which is often write-combined and
+// very slow to read back. Returns nullptr when the buffer has no shadow.
+void* BufferShadow(ResourceProxy* buffer, UINT offset);
+// After Unlock. `data` points at the written bytes (the shadow or the D3D9 memory);
+// `forward`, if not null, is the D3D9 buffer memory that must receive them too.
+void BufferWritten(ResourceProxy* buffer, UINT offset, UINT size, const void* data, void* forward);
 void ResourceDestroyed(ResourceProxy* resource);
 void VertexDeclarationCreated(const void* decl, const D3DVERTEXELEMENT9* elements);
 
@@ -65,5 +71,7 @@ void MovieStarting();
 // Comparison harness: the next Present also reads the WebGPU back buffer back.
 void RequestCapture();
 bool TakeCapture(std::vector<uint8_t>* bgra, UINT* width, UINT* height);
+// Writes every draw of the next frame to andreasgpu_logs/<name>.
+void RequestTrace(const wchar_t* name);
 
 }  // namespace agpu::wgb
