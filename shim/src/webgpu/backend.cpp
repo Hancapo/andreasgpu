@@ -161,6 +161,10 @@ struct Backend {
   wgpu::SurfaceConfiguration surfaceConfig;
   bool surfaceConfigured = false;
   bool presentsInGameWindow = false;
+  // Present mode: Dawn presents into a child of the game window (`window`) so the
+  // window can be hidden while DirectShow plays a movie in another child window.
+  HWND gameWindow = nullptr;
+  bool surfaceHidden = false;
   bool vsync = false;
 
   // Back buffer replacement
@@ -1302,6 +1306,10 @@ void Draw(D3DPRIMITIVETYPE type, UINT firstVertex, UINT vertexCount, const uint1
 
 bool ConfigureSurface() {
   RECT rc;
+  if (g->gameWindow) {
+    GetClientRect(g->gameWindow, &rc);
+    SetWindowPos(g->window, nullptr, 0, 0, rc.right, rc.bottom, SWP_NOZORDER | SWP_NOACTIVATE);
+  }
   GetClientRect(g->window, &rc);
   if (rc.right <= 0 || rc.bottom <= 0) return false;
   wgpu::SurfaceCapabilities caps;
@@ -1404,6 +1412,10 @@ void SubmitFrame() {
   if (!g->vertexData.empty()) g->queue.WriteBuffer(g->vertexRing, 0, g->vertexData.data(), g->vertexData.size());
   g->queue.Submit(1, &commands);
   if (canPresent) g->surface.Present();
+  if (canPresent && g->surfaceHidden) {  // first frame after a movie
+    ShowWindow(g->window, SW_SHOWNA);
+    g->surfaceHidden = false;
+  }
   if (g->captureRequested) ReadBackFrame();
 }
 
@@ -1419,6 +1431,30 @@ LRESULT CALLBACK MirrorWndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
   }
   return DefWindowProcW(w, msg, wp, lp);
+}
+
+// Child of the game window that only shows pixels: input falls through to the game.
+LRESULT CALLBACK SurfaceWndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
+  switch (msg) {
+    case WM_NCHITTEST: return HTTRANSPARENT;
+    case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
+    case WM_ERASEBKGND: return 1;
+  }
+  return DefWindowProcW(w, msg, wp, lp);
+}
+
+bool CreateSurfaceWindow(HWND gameWindow) {
+  WNDCLASSW wc{};
+  wc.lpfnWndProc = SurfaceWndProc;
+  wc.hInstance = GetModuleHandleW(nullptr);
+  wc.lpszClassName = L"AndreasGPUSurface";
+  RegisterClassW(&wc);
+  RECT rc;
+  GetClientRect(gameWindow, &rc);
+  g->window = CreateWindowExW(0, wc.lpszClassName, L"AndreasGPU", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, 0, 0,
+                              rc.right, rc.bottom, gameWindow, nullptr, wc.hInstance, nullptr);
+  g->gameWindow = g->window ? gameWindow : nullptr;
+  return g->window != nullptr;
 }
 
 RECT PickMirrorRect() {
@@ -1852,6 +1888,12 @@ void StretchRect(IDirect3DSurface9* source, const RECT* sourceRect, IDirect3DSur
   g->encoder.CopyTextureToTexture(&from, &to, &size);
 }
 
+void MovieStarting() {
+  if (!Active() || !g->gameWindow || g->surfaceHidden) return;
+  ShowWindow(g->window, SW_HIDE);
+  g->surfaceHidden = true;
+}
+
 void RequestCapture() {
   if (Active()) g->captureRequested = true;
 }
@@ -1962,7 +2004,7 @@ bool Start(HWND presentWindow, bool vsync) {
   if (!g->device) return false;
   g->queue = g->device.GetQueue();
   if (presentWindow) {
-    g->window = presentWindow;
+    if (!CreateSurfaceWindow(presentWindow)) return false;
     g->presentsInGameWindow = true;
   } else if (!CreateMirrorWindow()) {
     return false;

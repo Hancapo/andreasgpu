@@ -58,6 +58,10 @@ void DrawIndexedPrimitive(D3DPRIMITIVETYPE type, INT baseVertex, UINT minIndex, 
 void StretchRect(IDirect3DSurface9* source, const RECT* sourceRect, IDirect3DSurface9* dest, const RECT* destRect);
 void Present();
 
+// The game is about to play an FMV in a DirectShow child window of the game window:
+// hide the WebGPU surface until the next presented frame.
+void MovieStarting();
+
 // Comparison harness: the next Present also reads the WebGPU back buffer back.
 void RequestCapture();
 bool TakeCapture(std::vector<uint8_t>* bgra, UINT* width, UINT* height);

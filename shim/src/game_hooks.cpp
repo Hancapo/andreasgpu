@@ -9,6 +9,7 @@
 
 #include "log.h"
 #include "patch.h"
+#include "webgpu/backend.h"
 #include "widescreen.h"
 
 namespace agpu {
@@ -54,6 +55,20 @@ constexpr uint8_t kVideoMemoryCheckPatched[] = {0x90, 0x90};
 constexpr uintptr_t kDeviceDialog = 0x746225;
 constexpr uint8_t kDeviceDialogOriginal[] = {0x7E, 0x4C};  // jle 0x746273
 constexpr uint8_t kDeviceDialogPatched[] = {0xEB, 0x4C};   // jmp 0x746273
+
+// 0x747660 agpu_PlayMovie: void __cdecl (int showCmd, const char* path). Builds a
+// DirectShow graph whose video window is a child of the game window (put_Owner);
+// the game loop then only polls input until the movie ends (game states 2 and 4).
+using PlayMovieFn = void(__cdecl*)(int showCmd, const char* path);
+constexpr uintptr_t kPlayMovie = 0x747660;
+constexpr uintptr_t kPlayMovieCalls[] = {0x748B00, 0x748BF9};  // Logo.mpg, GTAtitles*.mpg
+constexpr uint8_t kPlayMovieGuard[] = {0xA1, 0x54, 0x70, 0xC1, 0x00, 0x8B, 0x08,
+                                       0x81, 0xEC, 0x00, 0x02, 0x00, 0x00};
+
+void __cdecl Hook_PlayMovie(int showCmd, const char* path) {
+  wgb::MovieStarting();
+  reinterpret_cast<PlayMovieFn>(kPlayMovie)(showCmd, path);
+}
 
 bool g_inGenerator = false;
 uint32_t g_generatorDesc = 0;
@@ -105,6 +120,9 @@ void InstallGameHooks() {
                     kVideoMemoryCheckPatched, sizeof(kVideoMemoryCheckOriginal)});
   InstallBytePatch({"SkipDeviceSelectionDialog", kDeviceDialog, kDeviceDialogOriginal, kDeviceDialogPatched,
                     sizeof(kDeviceDialogOriginal)});
+  for (uintptr_t site : kPlayMovieCalls)
+    InstallCallSiteHook({"PlayMovie", site, kPlayMovie, kPlayMovieGuard, sizeof(kPlayMovieGuard),
+                         reinterpret_cast<void*>(&Hook_PlayMovie)});
   InstallWidescreenPatches();
 }
 
