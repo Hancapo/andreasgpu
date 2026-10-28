@@ -66,3 +66,8 @@ Pick your native resolution once in Options > Display Setup > Resolution; it's s
   `d3dcompiler_47.dll`, `dxcompiler.dll` and `dxil.dll` from the Windows SDK
   (`Redist\D3D\x86`) next to `webgpu_dawn.dll`. CMake copies them for the tests.
 - `build\Release\agpu_dawn_smoke.exe [d3d12|d3d11]` checks device, surface, pipeline and present.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Dawn (fetched and built separately into `third_party/`) is
+BSD-3-Clause. GTA San Andreas is not included; you need your own copy of the game.
