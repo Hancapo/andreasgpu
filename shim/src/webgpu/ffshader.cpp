@@ -110,6 +110,8 @@ void EmitVertex(std::string& s, const FixedFunctionKey& k) {
   } else {
     s += "  let p = vec4f(in.pos.xyz, 1.0);\n"
          "  out.pos = u.wvp * p;\n"
+         // D3D9 pixel centres sit on integers: move half a pixel right and down.
+         "  out.pos = vec4f(out.pos.xy + vec2f(1.0 / u.viewport.z, -1.0 / u.viewport.w) * out.pos.w, out.pos.zw);\n"
          "  let viewPos = (u.wv * p).xyz;\n";
   }
   bool hasNormal = k.attrClass[kSlotNormal] != kAttrNone && !k.pretransformed;

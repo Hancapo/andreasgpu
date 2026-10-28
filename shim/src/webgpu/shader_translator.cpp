@@ -514,7 +514,11 @@ std::string TranslateVertexShader(const ParsedShader& shader, const uint8_t* inp
   }
   for (uint32_t r : e.temps) Append(s, "  var r%u = vec4f(0.0);\n", r);
   s += e.body;
-  s += "  out.fogDepth = out.pos.w;\n  return out;\n}\n\n";
+  // D3D9 pixel centres sit on integers: move half a pixel right and down.
+  s += "  out.pos = vec4f(out.pos.xy + vec2f(1.0 / u.viewport.z, -1.0 / u.viewport.w) * out.pos.w, out.pos.zw);\n";
+  // D3D9 clamps oD0/oD1 (and oFog) to [0, 1] before interpolation.
+  s += "  out.diffuse = saturate(out.diffuse);\n  out.specular = saturate(out.specular);\n"
+       "  out.fogFactor = saturate(out.fogFactor);\n  out.fogDepth = out.pos.w;\n  return out;\n}\n\n";
   return s;
 }
 
