@@ -49,6 +49,10 @@ D3DPRESENT_PARAMETERS RealPresentParams(const D3DPRESENT_PARAMETERS& game) {
   return used;
 }
 
+// Present mode with a running WebGPU backend: the real device only keeps state,
+// resources and frame pacing; nothing is drawn on it.
+bool WebGPUOwnsFrame() { return GetConfig().presentWebGPU && wgb::Active(); }
+
 void CopyBack(D3DPRESENT_PARAMETERS* game, const D3DPRESENT_PARAMETERS& used) {
   HWND deviceWindow = game->hDeviceWindow;
   CopyBackPresentParams(game, used);
@@ -231,12 +235,14 @@ HRESULT STDMETHODCALLTYPE DeviceProxy::StretchRect(IDirect3DSurface9* pSourceSur
   if (rec::Enabled()) rec::Resource("StretchRect %s -> %s filter=%s", rec::SurfaceDesc(pSourceSurface).c_str(),
                 rec::SurfaceDesc(pDestSurface).c_str(), rec::FilterName(Filter).c_str());
   wgb::StretchRect(pSourceSurface, pSourceRect, pDestSurface, pDestRect);
+  if (WebGPUOwnsFrame()) return D3D_OK;
   return real_->StretchRect(Unwrap(pSourceSurface), pSourceRect, Unwrap(pDestSurface), pDestRect, Filter);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::ColorFill(IDirect3DSurface9* pSurface, CONST RECT* pRect, D3DCOLOR color) {
   COUNT(ColorFill);
   if (rec::Enabled()) rec::Resource("ColorFill %s", rec::SurfaceDesc(pSurface).c_str());
+  if (WebGPUOwnsFrame()) return D3D_OK;
   return real_->ColorFill(Unwrap(pSurface), pRect, color);
 }
 
@@ -261,6 +267,7 @@ HRESULT STDMETHODCALLTYPE DeviceProxy::Clear(DWORD Count, CONST D3DRECT* pRects,
   COUNT(Clear);
   if (rec::Enabled()) rec::Resource("Clear flags=%lX rects=%s", Flags, Count ? "yes" : "no");
   wgb::Clear(Flags, Color, Z, Stencil);
+  if (WebGPUOwnsFrame()) return D3D_OK;
   return real_->Clear(Count, pRects, Flags, Color, Z, Stencil);
 }
 
@@ -318,6 +325,7 @@ HRESULT STDMETHODCALLTYPE DeviceProxy::DrawPrimitive(D3DPRIMITIVETYPE PrimitiveT
   COUNT(DrawPrimitive);
   rec::Draw(rec::kDrawPrimitive, PrimitiveType, PrimitiveCount, SP());
   wgb::DrawPrimitive(PrimitiveType, StartVertex, PrimitiveCount);
+  if (WebGPUOwnsFrame()) return D3D_OK;
   return real_->DrawPrimitive(PrimitiveType, StartVertex, PrimitiveCount);
 }
 
@@ -327,6 +335,7 @@ HRESULT STDMETHODCALLTYPE DeviceProxy::DrawIndexedPrimitive(D3DPRIMITIVETYPE arg
   COUNT(DrawIndexedPrimitive);
   rec::Draw(rec::kDrawIndexedPrimitive, arg0, primCount, SP());
   wgb::DrawIndexedPrimitive(arg0, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount);
+  if (WebGPUOwnsFrame()) return D3D_OK;
   return real_->DrawIndexedPrimitive(arg0, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount);
 }
 
@@ -335,6 +344,7 @@ HRESULT STDMETHODCALLTYPE DeviceProxy::DrawPrimitiveUP(D3DPRIMITIVETYPE Primitiv
                                                        UINT VertexStreamZeroStride) {
   COUNT(DrawPrimitiveUP);
   rec::Draw(rec::kDrawPrimitiveUP, PrimitiveType, PrimitiveCount, SP());
+  if (WebGPUOwnsFrame()) return D3D_OK;
   return real_->DrawPrimitiveUP(PrimitiveType, PrimitiveCount, pVertexStreamZeroData, VertexStreamZeroStride);
 }
 
@@ -345,6 +355,7 @@ HRESULT STDMETHODCALLTYPE DeviceProxy::DrawIndexedPrimitiveUP(D3DPRIMITIVETYPE P
                                                               UINT VertexStreamZeroStride) {
   COUNT(DrawIndexedPrimitiveUP);
   rec::Draw(rec::kDrawIndexedPrimitiveUP, PrimitiveType, PrimitiveCount, SP());
+  if (WebGPUOwnsFrame()) return D3D_OK;
   return real_->DrawIndexedPrimitiveUP(PrimitiveType, MinVertexIndex, NumVertices, PrimitiveCount, pIndexData,
                                        IndexDataFormat, pVertexStreamZeroData, VertexStreamZeroStride);
 }
