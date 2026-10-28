@@ -76,7 +76,7 @@ def parse(header, iface):
 
 
 def body(cls, iface, m):
-    count = f'  CountDeviceCall(DeviceCall::{m["name"]});\n' if iface == 'IDirect3DDevice9' else ''
+    count = f'  DeviceCallScope callScope(DeviceCall::{m["name"]});\n' if iface == 'IDirect3DDevice9' else ''
     call = f'real_->{m["name"]}({m["args"]})'
     if not m['outs']:
         return f'{m["ret"]} STDMETHODCALLTYPE {cls}::{m["name"]}({m["params"]}) {{\n{count}  return {call};\n}}\n'
@@ -101,7 +101,15 @@ def main():
          '#include <windows.h>', '#include <d3d9.h>', '', '#include "resources.h"', '', 'namespace agpu {', '',
          '// One entry per IDirect3DDevice9 method, in vtable order.', 'enum class DeviceCall : unsigned {']
     h += [f'  {m["name"]},' for m in device]
-    h += ['  Count', '};', 'extern const char* const kDeviceCallNames[];', 'void CountDeviceCall(DeviceCall call);', '']
+    h += ['  Count', '};', 'extern const char* const kDeviceCallNames[];', 'void CountDeviceCall(DeviceCall call);', '',
+          '// Counts a device call; with profile=1 also times it (call_profile.h).',
+          'struct DeviceCallScope {',
+          '  unsigned slot;',
+          '  unsigned long long start;',
+          '  explicit DeviceCallScope(DeviceCall call);',
+          '  explicit DeviceCallScope(unsigned extraSlot);',
+          '  ~DeviceCallScope();',
+          '};', '']
     h += ['class Direct3D9Proxy final : public IDirect3D9 {', ' public:',
           '  explicit Direct3D9Proxy(IDirect3D9* real) : real_(real) {}', ''] + decls('IDirect3D9')
     h += ['', ' private:', '  IDirect3D9* real_;', '};', '']

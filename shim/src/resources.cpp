@@ -2,6 +2,8 @@
 // (identity, lifetime, Lock/Unlock) plus Wrap/Unwrap.
 #include "resources.h"
 
+#include "call_profile.h"
+
 #include <unordered_map>
 
 #include "gen/d3d9_proxy.h"
@@ -148,12 +150,14 @@ ULONG STDMETHODCALLTYPE Texture9Proxy::Release() { return real_->Release(); }
 HRESULT STDMETHODCALLTYPE Texture9Proxy::GetDevice(IDirect3DDevice9** ppDevice) { return ReturnDevice(ppDevice); }
 HRESULT STDMETHODCALLTYPE Texture9Proxy::LockRect(UINT Level, D3DLOCKED_RECT* pLockedRect, CONST RECT* pRect,
                                                   DWORD Flags) {
+  DeviceCallScope callScope(kCallTextureLock);
   HRESULT hr = real_->LockRect(Level, pLockedRect, pRect, Flags);
   if (SUCCEEDED(hr) && backend && !(Flags & D3DLOCK_READONLY))
     locks.push_back({Level, *pLockedRect, pRect ? *pRect : RECT{}, pRect != nullptr, 0, 0, nullptr});
   return hr;
 }
 HRESULT STDMETHODCALLTYPE Texture9Proxy::UnlockRect(UINT Level) {
+  DeviceCallScope callScope(kCallTextureLock);
   for (auto it = locks.begin(); it != locks.end(); ++it) {
     if (it->subresource != Level) continue;
     wgb::TextureWritten(this, Level, it->locked, it->hasRect ? &it->rect : nullptr);
@@ -207,6 +211,7 @@ HRESULT STDMETHODCALLTYPE Surface9Proxy::GetContainer(REFIID riid, void** ppCont
 // RenderWare fills textures through their mip-level surfaces (GetSurfaceLevel +
 // LockRect), so a surface lock that belongs to a texture uploads into that level.
 HRESULT STDMETHODCALLTYPE Surface9Proxy::LockRect(D3DLOCKED_RECT* pLockedRect, CONST RECT* pRect, DWORD Flags) {
+  DeviceCallScope callScope(kCallTextureLock);
   HRESULT hr = real_->LockRect(pLockedRect, pRect, Flags);
   if (FAILED(hr) || (Flags & D3DLOCK_READONLY) || !wgb::Active()) return hr;
   IDirect3DTexture9* container = nullptr;
@@ -229,6 +234,7 @@ HRESULT STDMETHODCALLTYPE Surface9Proxy::LockRect(D3DLOCKED_RECT* pLockedRect, C
   return hr;
 }
 HRESULT STDMETHODCALLTYPE Surface9Proxy::UnlockRect() {
+  DeviceCallScope callScope(kCallTextureLock);
   if (!locks.empty()) {
     const PendingLock& lock = locks.back();
     wgb::TextureWritten(static_cast<ResourceProxy*>(lock.data), lock.subresource, lock.locked,
@@ -249,6 +255,7 @@ ULONG STDMETHODCALLTYPE VertexBuffer9Proxy::AddRef() { return real_->AddRef(); }
 ULONG STDMETHODCALLTYPE VertexBuffer9Proxy::Release() { return real_->Release(); }
 HRESULT STDMETHODCALLTYPE VertexBuffer9Proxy::GetDevice(IDirect3DDevice9** ppDevice) { return ReturnDevice(ppDevice); }
 HRESULT STDMETHODCALLTYPE VertexBuffer9Proxy::Lock(UINT OffsetToLock, UINT SizeToLock, void** ppbData, DWORD Flags) {
+  DeviceCallScope callScope(kCallBufferLock);
   HRESULT hr = real_->Lock(OffsetToLock, SizeToLock, ppbData, Flags);
   if (SUCCEEDED(hr) && backend && !(Flags & D3DLOCK_READONLY)) {
     void* shadow = wgb::BufferShadow(this, OffsetToLock);
@@ -258,6 +265,7 @@ HRESULT STDMETHODCALLTYPE VertexBuffer9Proxy::Lock(UINT OffsetToLock, UINT SizeT
   return hr;
 }
 HRESULT STDMETHODCALLTYPE VertexBuffer9Proxy::Unlock() {
+  DeviceCallScope callScope(kCallBufferLock);
   if (!locks.empty()) {
     const PendingLock& lock = locks.back();
     if (lock.shadow)
@@ -277,6 +285,7 @@ ULONG STDMETHODCALLTYPE IndexBuffer9Proxy::AddRef() { return real_->AddRef(); }
 ULONG STDMETHODCALLTYPE IndexBuffer9Proxy::Release() { return real_->Release(); }
 HRESULT STDMETHODCALLTYPE IndexBuffer9Proxy::GetDevice(IDirect3DDevice9** ppDevice) { return ReturnDevice(ppDevice); }
 HRESULT STDMETHODCALLTYPE IndexBuffer9Proxy::Lock(UINT OffsetToLock, UINT SizeToLock, void** ppbData, DWORD Flags) {
+  DeviceCallScope callScope(kCallBufferLock);
   HRESULT hr = real_->Lock(OffsetToLock, SizeToLock, ppbData, Flags);
   if (SUCCEEDED(hr) && backend && !(Flags & D3DLOCK_READONLY)) {
     void* shadow = wgb::BufferShadow(this, OffsetToLock);
@@ -286,6 +295,7 @@ HRESULT STDMETHODCALLTYPE IndexBuffer9Proxy::Lock(UINT OffsetToLock, UINT SizeTo
   return hr;
 }
 HRESULT STDMETHODCALLTYPE IndexBuffer9Proxy::Unlock() {
+  DeviceCallScope callScope(kCallBufferLock);
   if (!locks.empty()) {
     const PendingLock& lock = locks.back();
     if (lock.shadow)

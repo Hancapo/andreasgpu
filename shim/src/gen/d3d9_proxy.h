@@ -133,6 +133,15 @@ enum class DeviceCall : unsigned {
 extern const char* const kDeviceCallNames[];
 void CountDeviceCall(DeviceCall call);
 
+// Counts a device call; with profile=1 also times it (call_profile.h).
+struct DeviceCallScope {
+  unsigned slot;
+  unsigned long long start;
+  explicit DeviceCallScope(DeviceCall call);
+  explicit DeviceCallScope(unsigned extraSlot);
+  ~DeviceCallScope();
+};
+
 class Direct3D9Proxy final : public IDirect3D9 {
  public:
   explicit Direct3D9Proxy(IDirect3D9* real) : real_(real) {}

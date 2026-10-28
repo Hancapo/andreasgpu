@@ -23,7 +23,7 @@ namespace agpu {
 namespace {
 
 #define SP() static_cast<const uintptr_t*>(_AddressOfReturnAddress())
-#define COUNT(method) CountDeviceCall(DeviceCall::method)
+#define COUNT(method) DeviceCallScope callScope(DeviceCall::method)
 
 HWND g_window = nullptr;  // the game creates a single device
 

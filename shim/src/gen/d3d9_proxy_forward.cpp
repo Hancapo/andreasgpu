@@ -178,420 +178,420 @@ HMONITOR STDMETHODCALLTYPE Direct3D9Proxy::GetAdapterMonitor(UINT Adapter) {
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::TestCooperativeLevel() {
-  CountDeviceCall(DeviceCall::TestCooperativeLevel);
+  DeviceCallScope callScope(DeviceCall::TestCooperativeLevel);
   return real_->TestCooperativeLevel();
 }
 
 UINT STDMETHODCALLTYPE DeviceProxy::GetAvailableTextureMem() {
-  CountDeviceCall(DeviceCall::GetAvailableTextureMem);
+  DeviceCallScope callScope(DeviceCall::GetAvailableTextureMem);
   return real_->GetAvailableTextureMem();
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::EvictManagedResources() {
-  CountDeviceCall(DeviceCall::EvictManagedResources);
+  DeviceCallScope callScope(DeviceCall::EvictManagedResources);
   return real_->EvictManagedResources();
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetDeviceCaps(D3DCAPS9* pCaps) {
-  CountDeviceCall(DeviceCall::GetDeviceCaps);
+  DeviceCallScope callScope(DeviceCall::GetDeviceCaps);
   return real_->GetDeviceCaps(pCaps);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetDisplayMode(UINT iSwapChain, D3DDISPLAYMODE* pMode) {
-  CountDeviceCall(DeviceCall::GetDisplayMode);
+  DeviceCallScope callScope(DeviceCall::GetDisplayMode);
   return real_->GetDisplayMode(iSwapChain, pMode);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetCreationParameters(D3DDEVICE_CREATION_PARAMETERS *pParameters) {
-  CountDeviceCall(DeviceCall::GetCreationParameters);
+  DeviceCallScope callScope(DeviceCall::GetCreationParameters);
   return real_->GetCreationParameters(pParameters);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::SetCursorProperties(UINT XHotSpot, UINT YHotSpot, IDirect3DSurface9* pCursorBitmap) {
-  CountDeviceCall(DeviceCall::SetCursorProperties);
+  DeviceCallScope callScope(DeviceCall::SetCursorProperties);
   return real_->SetCursorProperties(XHotSpot, YHotSpot, Unwrap(pCursorBitmap));
 }
 
 void STDMETHODCALLTYPE DeviceProxy::SetCursorPosition(int X, int Y, DWORD Flags) {
-  CountDeviceCall(DeviceCall::SetCursorPosition);
+  DeviceCallScope callScope(DeviceCall::SetCursorPosition);
   return real_->SetCursorPosition(X, Y, Flags);
 }
 
 BOOL STDMETHODCALLTYPE DeviceProxy::ShowCursor(BOOL bShow) {
-  CountDeviceCall(DeviceCall::ShowCursor);
+  DeviceCallScope callScope(DeviceCall::ShowCursor);
   return real_->ShowCursor(bShow);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::CreateAdditionalSwapChain(D3DPRESENT_PARAMETERS* pPresentationParameters, IDirect3DSwapChain9** pSwapChain) {
-  CountDeviceCall(DeviceCall::CreateAdditionalSwapChain);
+  DeviceCallScope callScope(DeviceCall::CreateAdditionalSwapChain);
   return real_->CreateAdditionalSwapChain(pPresentationParameters, pSwapChain);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetSwapChain(UINT iSwapChain, IDirect3DSwapChain9** pSwapChain) {
-  CountDeviceCall(DeviceCall::GetSwapChain);
+  DeviceCallScope callScope(DeviceCall::GetSwapChain);
   return real_->GetSwapChain(iSwapChain, pSwapChain);
 }
 
 UINT STDMETHODCALLTYPE DeviceProxy::GetNumberOfSwapChains() {
-  CountDeviceCall(DeviceCall::GetNumberOfSwapChains);
+  DeviceCallScope callScope(DeviceCall::GetNumberOfSwapChains);
   return real_->GetNumberOfSwapChains();
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetBackBuffer(UINT iSwapChain, UINT iBackBuffer, D3DBACKBUFFER_TYPE Type, IDirect3DSurface9** ppBackBuffer) {
-  CountDeviceCall(DeviceCall::GetBackBuffer);
+  DeviceCallScope callScope(DeviceCall::GetBackBuffer);
   HRESULT hr = real_->GetBackBuffer(iSwapChain, iBackBuffer, Type, ppBackBuffer);
   if (SUCCEEDED(hr) && ppBackBuffer && *ppBackBuffer) *ppBackBuffer = Wrap(*ppBackBuffer);
   return hr;
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetRasterStatus(UINT iSwapChain, D3DRASTER_STATUS* pRasterStatus) {
-  CountDeviceCall(DeviceCall::GetRasterStatus);
+  DeviceCallScope callScope(DeviceCall::GetRasterStatus);
   return real_->GetRasterStatus(iSwapChain, pRasterStatus);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::SetDialogBoxMode(BOOL bEnableDialogs) {
-  CountDeviceCall(DeviceCall::SetDialogBoxMode);
+  DeviceCallScope callScope(DeviceCall::SetDialogBoxMode);
   return real_->SetDialogBoxMode(bEnableDialogs);
 }
 
 void STDMETHODCALLTYPE DeviceProxy::SetGammaRamp(UINT iSwapChain, DWORD Flags, CONST D3DGAMMARAMP* pRamp) {
-  CountDeviceCall(DeviceCall::SetGammaRamp);
+  DeviceCallScope callScope(DeviceCall::SetGammaRamp);
   return real_->SetGammaRamp(iSwapChain, Flags, pRamp);
 }
 
 void STDMETHODCALLTYPE DeviceProxy::GetGammaRamp(UINT iSwapChain, D3DGAMMARAMP* pRamp) {
-  CountDeviceCall(DeviceCall::GetGammaRamp);
+  DeviceCallScope callScope(DeviceCall::GetGammaRamp);
   return real_->GetGammaRamp(iSwapChain, pRamp);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::CreateVolumeTexture(UINT Width, UINT Height, UINT Depth, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DVolumeTexture9** ppVolumeTexture, HANDLE* pSharedHandle) {
-  CountDeviceCall(DeviceCall::CreateVolumeTexture);
+  DeviceCallScope callScope(DeviceCall::CreateVolumeTexture);
   return real_->CreateVolumeTexture(Width, Height, Depth, Levels, Usage, Format, Pool, ppVolumeTexture, pSharedHandle);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::CreateRenderTarget(UINT Width, UINT Height, D3DFORMAT Format, D3DMULTISAMPLE_TYPE MultiSample, DWORD MultisampleQuality, BOOL Lockable, IDirect3DSurface9** ppSurface, HANDLE* pSharedHandle) {
-  CountDeviceCall(DeviceCall::CreateRenderTarget);
+  DeviceCallScope callScope(DeviceCall::CreateRenderTarget);
   HRESULT hr = real_->CreateRenderTarget(Width, Height, Format, MultiSample, MultisampleQuality, Lockable, ppSurface, pSharedHandle);
   if (SUCCEEDED(hr) && ppSurface && *ppSurface) *ppSurface = Wrap(*ppSurface);
   return hr;
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::CreateDepthStencilSurface(UINT Width, UINT Height, D3DFORMAT Format, D3DMULTISAMPLE_TYPE MultiSample, DWORD MultisampleQuality, BOOL Discard, IDirect3DSurface9** ppSurface, HANDLE* pSharedHandle) {
-  CountDeviceCall(DeviceCall::CreateDepthStencilSurface);
+  DeviceCallScope callScope(DeviceCall::CreateDepthStencilSurface);
   HRESULT hr = real_->CreateDepthStencilSurface(Width, Height, Format, MultiSample, MultisampleQuality, Discard, ppSurface, pSharedHandle);
   if (SUCCEEDED(hr) && ppSurface && *ppSurface) *ppSurface = Wrap(*ppSurface);
   return hr;
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::UpdateSurface(IDirect3DSurface9* pSourceSurface, CONST RECT* pSourceRect, IDirect3DSurface9* pDestinationSurface, CONST POINT* pDestPoint) {
-  CountDeviceCall(DeviceCall::UpdateSurface);
+  DeviceCallScope callScope(DeviceCall::UpdateSurface);
   return real_->UpdateSurface(Unwrap(pSourceSurface), pSourceRect, Unwrap(pDestinationSurface), pDestPoint);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::UpdateTexture(IDirect3DBaseTexture9* pSourceTexture, IDirect3DBaseTexture9* pDestinationTexture) {
-  CountDeviceCall(DeviceCall::UpdateTexture);
+  DeviceCallScope callScope(DeviceCall::UpdateTexture);
   return real_->UpdateTexture(Unwrap(pSourceTexture), Unwrap(pDestinationTexture));
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetRenderTargetData(IDirect3DSurface9* pRenderTarget, IDirect3DSurface9* pDestSurface) {
-  CountDeviceCall(DeviceCall::GetRenderTargetData);
+  DeviceCallScope callScope(DeviceCall::GetRenderTargetData);
   return real_->GetRenderTargetData(Unwrap(pRenderTarget), Unwrap(pDestSurface));
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetFrontBufferData(UINT iSwapChain, IDirect3DSurface9* pDestSurface) {
-  CountDeviceCall(DeviceCall::GetFrontBufferData);
+  DeviceCallScope callScope(DeviceCall::GetFrontBufferData);
   return real_->GetFrontBufferData(iSwapChain, Unwrap(pDestSurface));
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::CreateOffscreenPlainSurface(UINT Width, UINT Height, D3DFORMAT Format, D3DPOOL Pool, IDirect3DSurface9** ppSurface, HANDLE* pSharedHandle) {
-  CountDeviceCall(DeviceCall::CreateOffscreenPlainSurface);
+  DeviceCallScope callScope(DeviceCall::CreateOffscreenPlainSurface);
   HRESULT hr = real_->CreateOffscreenPlainSurface(Width, Height, Format, Pool, ppSurface, pSharedHandle);
   if (SUCCEEDED(hr) && ppSurface && *ppSurface) *ppSurface = Wrap(*ppSurface);
   return hr;
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetRenderTarget(DWORD RenderTargetIndex, IDirect3DSurface9** ppRenderTarget) {
-  CountDeviceCall(DeviceCall::GetRenderTarget);
+  DeviceCallScope callScope(DeviceCall::GetRenderTarget);
   HRESULT hr = real_->GetRenderTarget(RenderTargetIndex, ppRenderTarget);
   if (SUCCEEDED(hr) && ppRenderTarget && *ppRenderTarget) *ppRenderTarget = Wrap(*ppRenderTarget);
   return hr;
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetDepthStencilSurface(IDirect3DSurface9** ppZStencilSurface) {
-  CountDeviceCall(DeviceCall::GetDepthStencilSurface);
+  DeviceCallScope callScope(DeviceCall::GetDepthStencilSurface);
   HRESULT hr = real_->GetDepthStencilSurface(ppZStencilSurface);
   if (SUCCEEDED(hr) && ppZStencilSurface && *ppZStencilSurface) *ppZStencilSurface = Wrap(*ppZStencilSurface);
   return hr;
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::BeginScene() {
-  CountDeviceCall(DeviceCall::BeginScene);
+  DeviceCallScope callScope(DeviceCall::BeginScene);
   return real_->BeginScene();
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::EndScene() {
-  CountDeviceCall(DeviceCall::EndScene);
+  DeviceCallScope callScope(DeviceCall::EndScene);
   return real_->EndScene();
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetTransform(D3DTRANSFORMSTATETYPE State, D3DMATRIX* pMatrix) {
-  CountDeviceCall(DeviceCall::GetTransform);
+  DeviceCallScope callScope(DeviceCall::GetTransform);
   return real_->GetTransform(State, pMatrix);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::MultiplyTransform(D3DTRANSFORMSTATETYPE arg0, CONST D3DMATRIX* arg1) {
-  CountDeviceCall(DeviceCall::MultiplyTransform);
+  DeviceCallScope callScope(DeviceCall::MultiplyTransform);
   return real_->MultiplyTransform(arg0, arg1);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetViewport(D3DVIEWPORT9* pViewport) {
-  CountDeviceCall(DeviceCall::GetViewport);
+  DeviceCallScope callScope(DeviceCall::GetViewport);
   return real_->GetViewport(pViewport);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetMaterial(D3DMATERIAL9* pMaterial) {
-  CountDeviceCall(DeviceCall::GetMaterial);
+  DeviceCallScope callScope(DeviceCall::GetMaterial);
   return real_->GetMaterial(pMaterial);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetLight(DWORD Index, D3DLIGHT9* arg1) {
-  CountDeviceCall(DeviceCall::GetLight);
+  DeviceCallScope callScope(DeviceCall::GetLight);
   return real_->GetLight(Index, arg1);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetLightEnable(DWORD Index, BOOL* pEnable) {
-  CountDeviceCall(DeviceCall::GetLightEnable);
+  DeviceCallScope callScope(DeviceCall::GetLightEnable);
   return real_->GetLightEnable(Index, pEnable);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::SetClipPlane(DWORD Index, CONST float* pPlane) {
-  CountDeviceCall(DeviceCall::SetClipPlane);
+  DeviceCallScope callScope(DeviceCall::SetClipPlane);
   return real_->SetClipPlane(Index, pPlane);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetClipPlane(DWORD Index, float* pPlane) {
-  CountDeviceCall(DeviceCall::GetClipPlane);
+  DeviceCallScope callScope(DeviceCall::GetClipPlane);
   return real_->GetClipPlane(Index, pPlane);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetRenderState(D3DRENDERSTATETYPE State, DWORD* pValue) {
-  CountDeviceCall(DeviceCall::GetRenderState);
+  DeviceCallScope callScope(DeviceCall::GetRenderState);
   return real_->GetRenderState(State, pValue);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::CreateStateBlock(D3DSTATEBLOCKTYPE Type, IDirect3DStateBlock9** ppSB) {
-  CountDeviceCall(DeviceCall::CreateStateBlock);
+  DeviceCallScope callScope(DeviceCall::CreateStateBlock);
   return real_->CreateStateBlock(Type, ppSB);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::BeginStateBlock() {
-  CountDeviceCall(DeviceCall::BeginStateBlock);
+  DeviceCallScope callScope(DeviceCall::BeginStateBlock);
   return real_->BeginStateBlock();
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::EndStateBlock(IDirect3DStateBlock9** ppSB) {
-  CountDeviceCall(DeviceCall::EndStateBlock);
+  DeviceCallScope callScope(DeviceCall::EndStateBlock);
   return real_->EndStateBlock(ppSB);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::SetClipStatus(CONST D3DCLIPSTATUS9* pClipStatus) {
-  CountDeviceCall(DeviceCall::SetClipStatus);
+  DeviceCallScope callScope(DeviceCall::SetClipStatus);
   return real_->SetClipStatus(pClipStatus);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetClipStatus(D3DCLIPSTATUS9* pClipStatus) {
-  CountDeviceCall(DeviceCall::GetClipStatus);
+  DeviceCallScope callScope(DeviceCall::GetClipStatus);
   return real_->GetClipStatus(pClipStatus);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetTexture(DWORD Stage, IDirect3DBaseTexture9** ppTexture) {
-  CountDeviceCall(DeviceCall::GetTexture);
+  DeviceCallScope callScope(DeviceCall::GetTexture);
   HRESULT hr = real_->GetTexture(Stage, ppTexture);
   if (SUCCEEDED(hr) && ppTexture && *ppTexture) *ppTexture = Wrap(*ppTexture);
   return hr;
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetTextureStageState(DWORD Stage, D3DTEXTURESTAGESTATETYPE Type, DWORD* pValue) {
-  CountDeviceCall(DeviceCall::GetTextureStageState);
+  DeviceCallScope callScope(DeviceCall::GetTextureStageState);
   return real_->GetTextureStageState(Stage, Type, pValue);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetSamplerState(DWORD Sampler, D3DSAMPLERSTATETYPE Type, DWORD* pValue) {
-  CountDeviceCall(DeviceCall::GetSamplerState);
+  DeviceCallScope callScope(DeviceCall::GetSamplerState);
   return real_->GetSamplerState(Sampler, Type, pValue);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::ValidateDevice(DWORD* pNumPasses) {
-  CountDeviceCall(DeviceCall::ValidateDevice);
+  DeviceCallScope callScope(DeviceCall::ValidateDevice);
   return real_->ValidateDevice(pNumPasses);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::SetPaletteEntries(UINT PaletteNumber, CONST PALETTEENTRY* pEntries) {
-  CountDeviceCall(DeviceCall::SetPaletteEntries);
+  DeviceCallScope callScope(DeviceCall::SetPaletteEntries);
   return real_->SetPaletteEntries(PaletteNumber, pEntries);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetPaletteEntries(UINT PaletteNumber, PALETTEENTRY* pEntries) {
-  CountDeviceCall(DeviceCall::GetPaletteEntries);
+  DeviceCallScope callScope(DeviceCall::GetPaletteEntries);
   return real_->GetPaletteEntries(PaletteNumber, pEntries);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::SetCurrentTexturePalette(UINT PaletteNumber) {
-  CountDeviceCall(DeviceCall::SetCurrentTexturePalette);
+  DeviceCallScope callScope(DeviceCall::SetCurrentTexturePalette);
   return real_->SetCurrentTexturePalette(PaletteNumber);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetCurrentTexturePalette(UINT *PaletteNumber) {
-  CountDeviceCall(DeviceCall::GetCurrentTexturePalette);
+  DeviceCallScope callScope(DeviceCall::GetCurrentTexturePalette);
   return real_->GetCurrentTexturePalette(PaletteNumber);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::SetScissorRect(CONST RECT* pRect) {
-  CountDeviceCall(DeviceCall::SetScissorRect);
+  DeviceCallScope callScope(DeviceCall::SetScissorRect);
   return real_->SetScissorRect(pRect);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetScissorRect(RECT* pRect) {
-  CountDeviceCall(DeviceCall::GetScissorRect);
+  DeviceCallScope callScope(DeviceCall::GetScissorRect);
   return real_->GetScissorRect(pRect);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::SetSoftwareVertexProcessing(BOOL bSoftware) {
-  CountDeviceCall(DeviceCall::SetSoftwareVertexProcessing);
+  DeviceCallScope callScope(DeviceCall::SetSoftwareVertexProcessing);
   return real_->SetSoftwareVertexProcessing(bSoftware);
 }
 
 BOOL STDMETHODCALLTYPE DeviceProxy::GetSoftwareVertexProcessing() {
-  CountDeviceCall(DeviceCall::GetSoftwareVertexProcessing);
+  DeviceCallScope callScope(DeviceCall::GetSoftwareVertexProcessing);
   return real_->GetSoftwareVertexProcessing();
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::SetNPatchMode(float nSegments) {
-  CountDeviceCall(DeviceCall::SetNPatchMode);
+  DeviceCallScope callScope(DeviceCall::SetNPatchMode);
   return real_->SetNPatchMode(nSegments);
 }
 
 float STDMETHODCALLTYPE DeviceProxy::GetNPatchMode() {
-  CountDeviceCall(DeviceCall::GetNPatchMode);
+  DeviceCallScope callScope(DeviceCall::GetNPatchMode);
   return real_->GetNPatchMode();
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::ProcessVertices(UINT SrcStartIndex, UINT DestIndex, UINT VertexCount, IDirect3DVertexBuffer9* pDestBuffer, IDirect3DVertexDeclaration9* pVertexDecl, DWORD Flags) {
-  CountDeviceCall(DeviceCall::ProcessVertices);
+  DeviceCallScope callScope(DeviceCall::ProcessVertices);
   return real_->ProcessVertices(SrcStartIndex, DestIndex, VertexCount, Unwrap(pDestBuffer), pVertexDecl, Flags);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetVertexDeclaration(IDirect3DVertexDeclaration9** ppDecl) {
-  CountDeviceCall(DeviceCall::GetVertexDeclaration);
+  DeviceCallScope callScope(DeviceCall::GetVertexDeclaration);
   return real_->GetVertexDeclaration(ppDecl);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetFVF(DWORD* pFVF) {
-  CountDeviceCall(DeviceCall::GetFVF);
+  DeviceCallScope callScope(DeviceCall::GetFVF);
   return real_->GetFVF(pFVF);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetVertexShader(IDirect3DVertexShader9** ppShader) {
-  CountDeviceCall(DeviceCall::GetVertexShader);
+  DeviceCallScope callScope(DeviceCall::GetVertexShader);
   return real_->GetVertexShader(ppShader);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetVertexShaderConstantF(UINT StartRegister, float* pConstantData, UINT Vector4fCount) {
-  CountDeviceCall(DeviceCall::GetVertexShaderConstantF);
+  DeviceCallScope callScope(DeviceCall::GetVertexShaderConstantF);
   return real_->GetVertexShaderConstantF(StartRegister, pConstantData, Vector4fCount);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::SetVertexShaderConstantI(UINT StartRegister, CONST int* pConstantData, UINT Vector4iCount) {
-  CountDeviceCall(DeviceCall::SetVertexShaderConstantI);
+  DeviceCallScope callScope(DeviceCall::SetVertexShaderConstantI);
   return real_->SetVertexShaderConstantI(StartRegister, pConstantData, Vector4iCount);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetVertexShaderConstantI(UINT StartRegister, int* pConstantData, UINT Vector4iCount) {
-  CountDeviceCall(DeviceCall::GetVertexShaderConstantI);
+  DeviceCallScope callScope(DeviceCall::GetVertexShaderConstantI);
   return real_->GetVertexShaderConstantI(StartRegister, pConstantData, Vector4iCount);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::SetVertexShaderConstantB(UINT StartRegister, CONST BOOL* pConstantData, UINT  BoolCount) {
-  CountDeviceCall(DeviceCall::SetVertexShaderConstantB);
+  DeviceCallScope callScope(DeviceCall::SetVertexShaderConstantB);
   return real_->SetVertexShaderConstantB(StartRegister, pConstantData, BoolCount);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetVertexShaderConstantB(UINT StartRegister, BOOL* pConstantData, UINT BoolCount) {
-  CountDeviceCall(DeviceCall::GetVertexShaderConstantB);
+  DeviceCallScope callScope(DeviceCall::GetVertexShaderConstantB);
   return real_->GetVertexShaderConstantB(StartRegister, pConstantData, BoolCount);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetStreamSource(UINT StreamNumber, IDirect3DVertexBuffer9** ppStreamData, UINT* pOffsetInBytes, UINT* pStride) {
-  CountDeviceCall(DeviceCall::GetStreamSource);
+  DeviceCallScope callScope(DeviceCall::GetStreamSource);
   HRESULT hr = real_->GetStreamSource(StreamNumber, ppStreamData, pOffsetInBytes, pStride);
   if (SUCCEEDED(hr) && ppStreamData && *ppStreamData) *ppStreamData = Wrap(*ppStreamData);
   return hr;
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::SetStreamSourceFreq(UINT StreamNumber, UINT Setting) {
-  CountDeviceCall(DeviceCall::SetStreamSourceFreq);
+  DeviceCallScope callScope(DeviceCall::SetStreamSourceFreq);
   return real_->SetStreamSourceFreq(StreamNumber, Setting);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetStreamSourceFreq(UINT StreamNumber, UINT* pSetting) {
-  CountDeviceCall(DeviceCall::GetStreamSourceFreq);
+  DeviceCallScope callScope(DeviceCall::GetStreamSourceFreq);
   return real_->GetStreamSourceFreq(StreamNumber, pSetting);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetIndices(IDirect3DIndexBuffer9** ppIndexData) {
-  CountDeviceCall(DeviceCall::GetIndices);
+  DeviceCallScope callScope(DeviceCall::GetIndices);
   HRESULT hr = real_->GetIndices(ppIndexData);
   if (SUCCEEDED(hr) && ppIndexData && *ppIndexData) *ppIndexData = Wrap(*ppIndexData);
   return hr;
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetPixelShader(IDirect3DPixelShader9** ppShader) {
-  CountDeviceCall(DeviceCall::GetPixelShader);
+  DeviceCallScope callScope(DeviceCall::GetPixelShader);
   return real_->GetPixelShader(ppShader);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetPixelShaderConstantF(UINT StartRegister, float* pConstantData, UINT Vector4fCount) {
-  CountDeviceCall(DeviceCall::GetPixelShaderConstantF);
+  DeviceCallScope callScope(DeviceCall::GetPixelShaderConstantF);
   return real_->GetPixelShaderConstantF(StartRegister, pConstantData, Vector4fCount);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::SetPixelShaderConstantI(UINT StartRegister, CONST int* pConstantData, UINT Vector4iCount) {
-  CountDeviceCall(DeviceCall::SetPixelShaderConstantI);
+  DeviceCallScope callScope(DeviceCall::SetPixelShaderConstantI);
   return real_->SetPixelShaderConstantI(StartRegister, pConstantData, Vector4iCount);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetPixelShaderConstantI(UINT StartRegister, int* pConstantData, UINT Vector4iCount) {
-  CountDeviceCall(DeviceCall::GetPixelShaderConstantI);
+  DeviceCallScope callScope(DeviceCall::GetPixelShaderConstantI);
   return real_->GetPixelShaderConstantI(StartRegister, pConstantData, Vector4iCount);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::SetPixelShaderConstantB(UINT StartRegister, CONST BOOL* pConstantData, UINT  BoolCount) {
-  CountDeviceCall(DeviceCall::SetPixelShaderConstantB);
+  DeviceCallScope callScope(DeviceCall::SetPixelShaderConstantB);
   return real_->SetPixelShaderConstantB(StartRegister, pConstantData, BoolCount);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::GetPixelShaderConstantB(UINT StartRegister, BOOL* pConstantData, UINT BoolCount) {
-  CountDeviceCall(DeviceCall::GetPixelShaderConstantB);
+  DeviceCallScope callScope(DeviceCall::GetPixelShaderConstantB);
   return real_->GetPixelShaderConstantB(StartRegister, pConstantData, BoolCount);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::DrawRectPatch(UINT Handle, CONST float* pNumSegs, CONST D3DRECTPATCH_INFO* pRectPatchInfo) {
-  CountDeviceCall(DeviceCall::DrawRectPatch);
+  DeviceCallScope callScope(DeviceCall::DrawRectPatch);
   return real_->DrawRectPatch(Handle, pNumSegs, pRectPatchInfo);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::DrawTriPatch(UINT Handle, CONST float* pNumSegs, CONST D3DTRIPATCH_INFO* pTriPatchInfo) {
-  CountDeviceCall(DeviceCall::DrawTriPatch);
+  DeviceCallScope callScope(DeviceCall::DrawTriPatch);
   return real_->DrawTriPatch(Handle, pNumSegs, pTriPatchInfo);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::DeletePatch(UINT Handle) {
-  CountDeviceCall(DeviceCall::DeletePatch);
+  DeviceCallScope callScope(DeviceCall::DeletePatch);
   return real_->DeletePatch(Handle);
 }
 
 HRESULT STDMETHODCALLTYPE DeviceProxy::CreateQuery(D3DQUERYTYPE Type, IDirect3DQuery9** ppQuery) {
-  CountDeviceCall(DeviceCall::CreateQuery);
+  DeviceCallScope callScope(DeviceCall::CreateQuery);
   return real_->CreateQuery(Type, ppQuery);
 }
 

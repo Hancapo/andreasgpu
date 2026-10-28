@@ -22,6 +22,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "call_profile.h"
 #include "config.h"
 #include "log.h"
 #include "resources.h"
@@ -2135,6 +2136,7 @@ void ReportProfile(LARGE_INTEGER now, LARGE_INTEGER freq) {
     }
     snprintf(line + n, sizeof(line) - n, " | backend %.2f, rest %.2f\n", ours, ms / 600.0 - ours);
     Logf("%s", line);
+    ReportDeviceCalls(ticksPerMs, 600);
   }
   std::memset(g_prof.ticks, 0, sizeof(g_prof.ticks));
   g_prof.startTsc = tsc;
