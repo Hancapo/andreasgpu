@@ -1,0 +1,134 @@
+"""Generates the forwarding half of the D3D9 proxies from the SDK's d3d9.h.
+
+  python -I tools/gen_d3d9_proxy.py "<Windows Kits>/Include/<ver>/shared/d3d9.h" shim/src/gen
+
+Writes d3d9_proxy.h (class declarations + device call enum) and
+d3d9_proxy_forward.cpp (one forwarding body per method not in CUSTOM). Methods in
+CUSTOM are written by hand (shim/src/d3d9_proxy.cpp, shim/src/resources.cpp).
+
+Every forwarded method unwraps proxied resources it receives and wraps the ones it
+returns, so the game only ever sees proxies and the real runtime only real objects.
+Every device call is counted.
+"""
+import pathlib
+import re
+import sys
+
+CUSTOM = {
+    'IDirect3D9': {'QueryInterface', 'AddRef', 'Release', 'CreateDevice'},
+    'IDirect3DDevice9': {
+        'QueryInterface', 'AddRef', 'Release', 'GetDirect3D', 'Reset', 'Present',
+        'CreateTexture', 'CreateCubeTexture', 'CreateVertexBuffer', 'CreateIndexBuffer',
+        'StretchRect', 'ColorFill', 'SetRenderTarget', 'SetDepthStencilSurface', 'Clear',
+        'SetTransform', 'SetLight', 'LightEnable', 'SetRenderState', 'SetTexture',
+        'SetTextureStageState', 'SetSamplerState', 'DrawPrimitive', 'DrawIndexedPrimitive',
+        'DrawPrimitiveUP', 'DrawIndexedPrimitiveUP', 'CreateVertexDeclaration',
+        'SetVertexDeclaration', 'SetFVF', 'CreateVertexShader', 'SetVertexShader',
+        'SetStreamSource', 'CreatePixelShader', 'SetPixelShader', 'SetMaterial', 'SetViewport',
+        'SetIndices', 'SetVertexShaderConstantF', 'SetPixelShaderConstantF',
+    },
+    # Resource proxies: identity/lifetime and the Lock/Unlock data path.
+    'IDirect3DTexture9': {'QueryInterface', 'AddRef', 'Release', 'GetDevice', 'LockRect', 'UnlockRect'},
+    'IDirect3DCubeTexture9': {'QueryInterface', 'AddRef', 'Release', 'GetDevice', 'LockRect', 'UnlockRect'},
+    'IDirect3DSurface9': {'QueryInterface', 'AddRef', 'Release', 'GetDevice', 'GetContainer', 'LockRect',
+                          'UnlockRect'},
+    'IDirect3DVertexBuffer9': {'QueryInterface', 'AddRef', 'Release', 'GetDevice', 'Lock', 'Unlock'},
+    'IDirect3DIndexBuffer9': {'QueryInterface', 'AddRef', 'Release', 'GetDevice', 'Lock', 'Unlock'},
+}
+PROXY = {
+    'IDirect3D9': 'Direct3D9Proxy',
+    'IDirect3DDevice9': 'DeviceProxy',
+    'IDirect3DTexture9': 'Texture9Proxy',
+    'IDirect3DCubeTexture9': 'CubeTexture9Proxy',
+    'IDirect3DSurface9': 'Surface9Proxy',
+    'IDirect3DVertexBuffer9': 'VertexBuffer9Proxy',
+    'IDirect3DIndexBuffer9': 'IndexBuffer9Proxy',
+}
+RESOURCES = [i for i in PROXY if i not in ('IDirect3D9', 'IDirect3DDevice9')]
+WRAPPED = r'IDirect3D(?:Texture9|CubeTexture9|Surface9|VertexBuffer9|IndexBuffer9|BaseTexture9)'
+METHOD = re.compile(r'STDMETHOD(?:_\(\s*([^,]+?)\s*,\s*(\w+)\)|\((\w+)\))\s*\(THIS_?\s*(.*?)\)\s*PURE;')
+
+
+def parse(header, iface):
+    block = re.search(r'DECLARE_INTERFACE_\(%s,\s*\w+\)\s*\{(.*?)\};' % iface, header, re.S).group(1)
+    methods = []
+    for m in METHOD.finditer(block):
+        ret = m.group(1) or 'HRESULT'
+        name = m.group(2) or m.group(3)
+        params, args, ins, outs = [], [], [], []
+        for i, p in enumerate(q.strip() for q in m.group(4).split(',') if q.strip()):
+            words = [w for w in re.split(r'[\s*&]+', p) if w and w != 'CONST']
+            if len(words) < 2:  # unnamed parameter, e.g. `CONST D3DLIGHT9*`
+                p += f' arg{i}'
+                words.append(f'arg{i}')
+            name_ = words[-1]
+            params.append(p)
+            if re.match(r'^(?:CONST\s+)?%s\s*\*\s*\w+$' % WRAPPED, p):
+                ins.append(name_)
+                args.append(f'Unwrap({name_})')
+            else:
+                if re.match(r'^%s\s*\*\*\s*\w+$' % WRAPPED, p):
+                    outs.append(name_)
+                args.append(name_)
+        methods.append({'ret': ret, 'name': name, 'params': ', '.join(params), 'args': ', '.join(args),
+                        'outs': outs})
+    return methods
+
+
+def body(cls, iface, m):
+    count = f'  CountDeviceCall(DeviceCall::{m["name"]});\n' if iface == 'IDirect3DDevice9' else ''
+    call = f'real_->{m["name"]}({m["args"]})'
+    if not m['outs']:
+        return f'{m["ret"]} STDMETHODCALLTYPE {cls}::{m["name"]}({m["params"]}) {{\n{count}  return {call};\n}}\n'
+    assert m['ret'] == 'HRESULT', m['name']
+    wraps = ''.join(f'  if (SUCCEEDED(hr) && {o} && *{o}) *{o} = Wrap(*{o});\n' for o in m['outs'])
+    return (f'HRESULT STDMETHODCALLTYPE {cls}::{m["name"]}({m["params"]}) {{\n{count}'
+            f'  HRESULT hr = {call};\n{wraps}  return hr;\n}}\n')
+
+
+def main():
+    header = open(sys.argv[1], encoding='latin-1').read()
+    out = pathlib.Path(sys.argv[2])
+    out.mkdir(parents=True, exist_ok=True)
+    ifaces = {i: parse(header, i) for i in PROXY}
+    device = ifaces['IDirect3DDevice9']
+    assert len(device) == 119 and len(ifaces['IDirect3D9']) == 17
+
+    def decls(iface):
+        return [f'  {m["ret"]} STDMETHODCALLTYPE {m["name"]}({m["params"]}) override;' for m in ifaces[iface]]
+
+    h = ['// Generated by tools/gen_d3d9_proxy.py from d3d9.h. Do not edit.', '#pragma once',
+         '#include <windows.h>', '#include <d3d9.h>', '', '#include "resources.h"', '', 'namespace agpu {', '',
+         '// One entry per IDirect3DDevice9 method, in vtable order.', 'enum class DeviceCall : unsigned {']
+    h += [f'  {m["name"]},' for m in device]
+    h += ['  Count', '};', 'extern const char* const kDeviceCallNames[];', 'void CountDeviceCall(DeviceCall call);', '']
+    h += ['class Direct3D9Proxy final : public IDirect3D9 {', ' public:',
+          '  explicit Direct3D9Proxy(IDirect3D9* real) : real_(real) {}', ''] + decls('IDirect3D9')
+    h += ['', ' private:', '  IDirect3D9* real_;', '};', '']
+    h += ['class DeviceProxy final : public IDirect3DDevice9 {', ' public:',
+          '  DeviceProxy(IDirect3DDevice9* real, Direct3D9Proxy* d3d) : real_(real), d3d_(d3d) {}', '']
+    h += decls('IDirect3DDevice9')
+    h += ['', ' private:', '  IDirect3DDevice9* real_;', '  Direct3D9Proxy* d3d_;', '};', '']
+    for iface in RESOURCES:
+        cls = PROXY[iface]
+        h += [f'class {cls} final : public {iface}, public ResourceProxy {{', ' public:',
+              f'  explicit {cls}({iface}* real) : ResourceProxy(real), real_(real) {{}}',
+              f'  {iface}* real() const {{ return real_; }}', '']
+        h += decls(iface)
+        h += ['', ' private:', f'  {iface}* real_;', '};', '']
+    h += ['}  // namespace agpu', '']
+    (out / 'd3d9_proxy.h').write_text('\n'.join(h), newline='\n')
+
+    c = ['// Generated by tools/gen_d3d9_proxy.py from d3d9.h. Do not edit.', '#include "d3d9_proxy.h"', '',
+         'namespace agpu {', '', 'const char* const kDeviceCallNames[] = {']
+    c += [f'    "{m["name"]}",' for m in device]
+    c += ['};', '']
+    for iface, methods in ifaces.items():
+        for m in methods:
+            if m['name'] not in CUSTOM[iface]:
+                c.append(body(PROXY[iface], iface, m))
+    c += ['}  // namespace agpu', '']
+    (out / 'd3d9_proxy_forward.cpp').write_text('\n'.join(c), newline='\n')
+
+
+main()
