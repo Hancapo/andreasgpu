@@ -704,7 +704,7 @@ wgpu::StencilOperation MapStencilOp(DWORD op) {
 // bytecode of every referenced shader is stored and re-registered on load.
 
 constexpr char kCacheMagic[8] = {'A', 'G', 'P', 'U', 'P', 'C', '1', 0};
-constexpr uint32_t kCacheVersion = 1;
+constexpr uint32_t kCacheVersion = 2;
 enum : uint8_t { kRecordShader = 1, kRecordPipeline = 2 };
 
 void CacheWriteShader(uint32_t id) {
@@ -1001,6 +1001,10 @@ void FillUniforms(UniformBlock& u) {
   const D3DMATRIX& v = s.view;
   for (int j = 0; j < 3; ++j)
     u.cameraPos[j] = -(v.m[3][0] * v.m[j][0] + v.m[3][1] * v.m[j][1] + v.m[3][2] * v.m[j][2]);
+  // Camera axis (+z in view space) in world space is the third column of R; negate it.
+  float back[3] = {-v.m[0][2], -v.m[1][2], -v.m[2][2]};
+  float backLen = std::sqrt(back[0] * back[0] + back[1] * back[1] + back[2] * back[2]);
+  for (int j = 0; j < 3; ++j) u.cameraBack[j] = backLen > 0 ? back[j] / backLen : 0.0f;
   std::memcpy(u.psConst, s.psConst, sizeof(u.psConst));
   int n = 0;
   for (const auto& [index, light] : s.lights) {
@@ -1071,6 +1075,7 @@ bool BuildKey(const Decl& decl, D3DPRIMITIVETYPE type, bool indexed, PipelineKey
   ff.emissiveSource = static_cast<uint8_t>(rs[D3DRS_EMISSIVEMATERIALSOURCE]);
   ff.specularEnable = rs[D3DRS_SPECULARENABLE] != 0;
   ff.normalizeNormals = rs[D3DRS_NORMALIZENORMALS] != 0;
+  ff.localViewer = ff.lighting && ff.specularEnable && rs[D3DRS_LOCALVIEWER] != 0;
   ff.lightCount = ff.lighting ? static_cast<uint8_t>(CountLights()) : 0;
   if (!ff.lighting) ff.diffuseSource = ff.ambientSource = ff.specularSource = ff.emissiveSource = 0;
   if (rs[D3DRS_FOGENABLE]) {

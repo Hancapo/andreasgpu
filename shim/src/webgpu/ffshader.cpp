@@ -32,7 +32,7 @@ const char* kUniforms = R"(struct U {
   tex0: mat4x4f, tex1: mat4x4f, tex2: mat4x4f, tex3: mat4x4f,
   viewport: vec4f,
   matDiffuse: vec4f, matAmbient: vec4f, matSpecular: vec4f, matEmissive: vec4f,
-  globalAmbient: vec4f, fogColor: vec4f, fogParams: vec4f, tfactor: vec4f, misc: vec4f, cameraPos: vec4f,
+  globalAmbient: vec4f, fogColor: vec4f, fogParams: vec4f, tfactor: vec4f, misc: vec4f, cameraPos: vec4f, cameraBack: vec4f,
   lightDir: array<vec4f, 4>, lightDiffuse: array<vec4f, 4>, lightAmbient: array<vec4f, 4>, lightSpecular: array<vec4f, 4>,
   psConst: array<vec4f, 8>,
 };
@@ -85,6 +85,21 @@ std::string AttrVec4(const FixedFunctionKey& k, int slot, const char* name) {
   }
 }
 
+// Texture coordinate as D3D9 feeds it to a texture transform: the first missing
+// component is 1 and the rest 0, so (u, v) becomes (u, v, 1, 0) and 2D matrices
+// keep their translation in the third row (_31, _32).
+std::string TransformInput(const FixedFunctionKey& k, int slot, const char* name) {
+  int n = k.attrComponents[slot];
+  std::string v = k.attrClass[slot] == kAttrFloat ? std::string("in.") + name
+                                                  : "vec" + std::to_string(n) + "f(in." + name + ")";
+  switch (n) {
+    case 1: return "vec4f(" + v + ", 1.0, 0.0, 0.0)";
+    case 2: return "vec4f(" + v + ", 1.0, 0.0)";
+    case 3: return "vec4f(" + v + ", 1.0)";
+    default: return v;
+  }
+}
+
 std::string MaterialSource(const FixedFunctionKey& k, uint8_t source, const char* material) {
   if (k.colorVertex) {
     if (source == 1 && k.attrClass[kSlotColor0]) return "in.c0";
@@ -127,8 +142,10 @@ void EmitVertex(std::string& s, const FixedFunctionKey& k) {
     s += "  var ambient = u.globalAmbient.rgb;\n  var diffuse = vec3f(0.0);\n  var specular = vec3f(0.0);\n";
     if (hasNormal && k.lightCount) {
       s += "  let worldPos = (u.world * p).xyz;\n"
-           "  let n = normalize((u.world * vec4f(in.normal, 0.0)).xyz);\n"
-           "  let toEye = normalize(u.cameraPos.xyz - worldPos);\n";
+           "  let n = normalize((u.world * vec4f(in.normal, 0.0)).xyz);\n";
+      // Without D3DRS_LOCALVIEWER, D3D9 uses (0, 0, -1) in camera space (measured).
+      s += k.localViewer ? "  let toEye = normalize(u.cameraPos.xyz - worldPos);\n"
+                         : "  let toEye = u.cameraBack.xyz;\n";
       Append(s, "  for (var i = 0; i < %d; i++) {\n", k.lightCount);
       s += "    let l = -u.lightDir[i].xyz;\n"
            "    let ndl = dot(n, l);\n"
@@ -167,7 +184,9 @@ void EmitVertex(std::string& s, const FixedFunctionKey& k) {
         default: {
           int slot = kSlotTexcoord0 + (st.texCoordIndex & 3);
           static const char* kUv[] = {"uv0", "uv1", "uv2", "uv3"};
-          if (k.attrClass[slot]) coord = AttrVec4(k, slot, kUv[st.texCoordIndex & 3]);
+          if (k.attrClass[slot])
+            coord = st.ttfCount ? TransformInput(k, slot, kUv[st.texCoordIndex & 3])
+                                : AttrVec4(k, slot, kUv[st.texCoordIndex & 3]);
         }
       }
       if (st.ttfCount) {

@@ -58,6 +58,7 @@ struct FixedFunctionKey {
   uint8_t vsInputClass[kMaxShaderInputs];       // InputClass per vN
   uint8_t vsInputComponents[kMaxShaderInputs];
   uint8_t fogFactorFromShader;  // vertex fog with a vertex shader: use oFog
+  uint8_t localViewer;          // D3DRS_LOCALVIEWER: per-vertex view vector for specular
 };
 #pragma pack(pop)
 
@@ -82,6 +83,7 @@ struct alignas(16) UniformBlock {
   float tfactor[4];
   float misc[4];       // alphaRef (0..1), specular power, 0, 0
   float cameraPos[4];  // world space
+  float cameraBack[4];  // world space, towards the camera along its axis (non-local viewer)
   float lightDir[kMaxLights][4];  // world space, pointing from the light
   float lightDiffuse[kMaxLights][4];
   float lightAmbient[kMaxLights][4];
