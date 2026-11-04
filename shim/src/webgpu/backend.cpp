@@ -25,6 +25,7 @@
 #include "call_profile.h"
 #include "config.h"
 #include "log.h"
+#include "render_phase.h"
 #include "resources.h"
 #include "webgpu/ffshader.h"
 #include "webgpu/shader_translator.h"
@@ -304,9 +305,10 @@ struct Backend {
   };
   std::unordered_map<const void*, DepthSurface> depthSurfaces;
   DepthSurface* boundDepth = nullptr;
-  bool skipDrawSet = false;  // SetSkipDraw
-  DrawSignature skipDraw;
-  std::vector<DrawSignature> decalCandidates;  // collected while tracing
+  int skipCategory = -1;          // SetSkipCategory
+  uint32_t categoriesTraced = 0;  // CategoriesInTrace
+  // Draws per pass and category since the last stats line.
+  unsigned phaseDraws[static_cast<int>(phase::Pass::kCount)][static_cast<int>(phase::Category::kCount)] = {};
   // First depth pass of the frame not begun yet (kClearStencil experiment).
   bool stencilFresh = true;
 
@@ -1347,7 +1349,8 @@ void TraceDraw(const Decl& decl, D3DPRIMITIVETYPE type, UINT firstVertex, UINT c
   const State& s = g->state;
   const DWORD* rs = s.rs;
   char line[1024];
-  int n = snprintf(line, sizeof(line), "%4u %-9s type=%u first=%u count=%u pre=%d", g->traceDraw++, outcome,
+  int n = snprintf(line, sizeof(line), "%4u %-9s %s/%-10s type=%u first=%u count=%u pre=%d", g->traceDraw++,
+                   outcome, phase::Name(phase::CurrentPass()), phase::Name(phase::CurrentCategory()),
                    static_cast<unsigned>(type), firstVertex, count, decl.pretransformed);
   // First vertex position (dynamic streams only: their bytes are in the shadow).
   for (const VertexElement& e : decl.elements) {
@@ -1444,18 +1447,12 @@ void Draw(D3DPRIMITIVETYPE type, UINT firstVertex, UINT vertexCount, const uint1
       if (g->tracing) TraceDraw(decl, type, first, count, outcome);
     }
   } traceExit{decl, type, firstVertex, indices ? indexCount : vertexCount};
-  if (g->tracing || g->skipDrawSet) {
-    Texture* t0 = TextureOf(s.textures[0]);
-    DrawSignature sig{static_cast<UINT>(type), firstVertex, indices ? indexCount : vertexCount, t0 ? t0->id : 0};
-    if (g->skipDrawSet && sig == g->skipDraw) {
-      traceExit.outcome = "skipped";
-      return;
-    }
-    bool decal = !decl.pretransformed && s.rs[D3DRS_ALPHABLENDENABLE] && !s.rs[D3DRS_ZWRITEENABLE] &&
-                 !s.rs[D3DRS_STENCILENABLE] &&
-                 !(s.tss[1][D3DTSS_COLOROP] == D3DTOP_MODULATE && s.tss[1][D3DTSS_COLORARG2] == D3DTA_TFACTOR);
-    auto& c = g->decalCandidates;
-    if (g->tracing && decal && c.size() < 24 && std::find(c.begin(), c.end(), sig) == c.end()) c.push_back(sig);
+  const int category = static_cast<int>(phase::CurrentCategory());
+  ++g->phaseDraws[static_cast<int>(phase::CurrentPass())][category];
+  if (g->tracing) g->categoriesTraced |= 1u << category;
+  if (category == g->skipCategory) {
+    traceExit.outcome = "skipped";
+    return;
   }
   if (g->skipMask && SkippedByExperiment(decl)) {
     traceExit.outcome = "skipped";
@@ -2275,13 +2272,11 @@ void SetSkip(unsigned mask) {
   if (Active()) g->skipMask = mask;
 }
 
-std::vector<DrawSignature> DecalCandidates() { return Active() ? g->decalCandidates : std::vector<DrawSignature>{}; }
-
-void SetSkipDraw(const DrawSignature* sig) {
-  if (!Active()) return;
-  g->skipDrawSet = sig != nullptr;
-  if (sig) g->skipDraw = *sig;
+void SetSkipCategory(int category) {
+  if (Active()) g->skipCategory = category;
 }
+
+uint32_t CategoriesInTrace() { return Active() ? g->categoriesTraced : 0; }
 
 DWORD RenderState(D3DRENDERSTATETYPE state) {
   return Active() && static_cast<unsigned>(state) < 256 ? g->state.rs[state] : 0;
@@ -2345,7 +2340,7 @@ void Present() {
     g->traceArmed = false;
     g->tracing = true;
     g->traceDraw = 0;
-    g->decalCandidates.clear();
+    g->categoriesTraced = 0;
   }
   {
     ProfScope prof(kProfSubmit);
@@ -2398,6 +2393,19 @@ void Present() {
          g->frame, g->stats.totalFrameMs / 600.0, g->stats.worstFrameMs, g->stats.slowFrames, g->stats.draws,
          g->stats.drawn, g->stats.waitingForPipeline, g->stats.skippedShader, g->stats.skippedOther,
          g->stats.pipelinesCreated, g->pipelines.size(), g->bindGroups.size(), g->stats.textureUploads);
+    // Draws per frame by pass and category (render_phase.h).
+    std::string phases = "[phase] draws/frame:";
+    for (int p = 0; p < static_cast<int>(phase::Pass::kCount); ++p) {
+      for (int c = 0; c < static_cast<int>(phase::Category::kCount); ++c) {
+        if (!g->phaseDraws[p][c]) continue;
+        char part[64];
+        snprintf(part, sizeof(part), " %s/%s %.1f", phase::Name(static_cast<phase::Pass>(p)),
+                 phase::Name(static_cast<phase::Category>(c)), g->phaseDraws[p][c] / 600.0);
+        phases += part;
+      }
+    }
+    Logf("%s\n", phases.c_str());
+    std::memset(g->phaseDraws, 0, sizeof(g->phaseDraws));
     if (g_prof.on) ReportProfile(now, freq);
     LogFlush();
     g->stats = {};

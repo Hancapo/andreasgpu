@@ -8,8 +8,9 @@ namespace agpu {
 // (image base 0x400000). On any mismatch the patch is refused and logged, so a
 // different build (compact exe, 1.01, Steam...) runs unpatched instead of crashing.
 
-// Redirects one `call rel32` (E8) instruction to `replacement`. The original target
-// must be `expectedTarget` and must start with `guard` bytes.
+// Redirects one `call rel32` (E8) or tail `jmp rel32` (E9) instruction to
+// `replacement`. The original target must be `expectedTarget` and must start with
+// `guard` bytes.
 struct CallSiteHook {
   const char* name;
   uintptr_t site;

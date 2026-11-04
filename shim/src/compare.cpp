@@ -10,6 +10,7 @@
 
 #include "config.h"
 #include "log.h"
+#include "render_phase.h"
 #include "webgpu/backend.h"
 
 namespace agpu::compare {
@@ -25,14 +26,13 @@ Image g_d3d9;
 unsigned g_index = 0;
 
 // F10 in mirror mode runs these on consecutive frames. Most leave a group of draws
-// out of the WebGPU frame (wgb::SetSkip / SetSkipDraw) and compare it with the full
+// out of the WebGPU frame (wgb::SetSkip / SetSkipCategory) and compare it with the full
 // D3D9 frame; the stencil probes change both renderers alike.
 struct Experiment {
   std::string label;
   unsigned skip = 0;
   bool stencilView = false, clearStencil = false;
-  bool skipDraw = false;
-  wgb::DrawSignature draw;
+  int skipCategory = -1;
 };
 std::vector<Experiment> g_experiments;
 int g_step = -1;  // experiment active in the frame being drawn, -1 when idle
@@ -49,16 +49,14 @@ void StartExperiments() {
   };
 }
 
-// After the traced first frame: one experiment per blended no-depth-write draw.
-void AddDrawExperiments() {
-  for (const wgb::DrawSignature& d : wgb::DecalCandidates()) {
+// After the traced first frame: one experiment per draw category it contained.
+void AddCategoryExperiments() {
+  uint32_t mask = wgb::CategoriesInTrace();
+  for (int c = 0; c < static_cast<int>(phase::Category::kCount); ++c) {
+    if (!(mask & (1u << c))) continue;
     Experiment e;
-    char label[128];
-    snprintf(label, sizeof(label), "without the draw type=%u first=%u count=%u tex0=%u", d.type, d.first, d.count,
-             d.texture);
-    e.label = label;
-    e.skipDraw = true;
-    e.draw = d;
+    e.label = std::string("without ") + phase::Name(static_cast<phase::Category>(c)) + " draws";
+    e.skipCategory = c;
     g_experiments.push_back(e);
   }
 }
@@ -66,7 +64,7 @@ void AddDrawExperiments() {
 void Apply(int step) {
   const Experiment* e = step >= 0 ? &g_experiments[step] : nullptr;
   wgb::SetSkip(e ? e->skip : 0);
-  wgb::SetSkipDraw(e && e->skipDraw ? &e->draw : nullptr);
+  wgb::SetSkipCategory(e ? e->skipCategory : -1);
 }
 ULONGLONG g_lastAuto = 0;
 
@@ -233,7 +231,7 @@ void BeforePresent(IDirect3DDevice9* real, HWND window) {
     return;
   }
   if (step >= 0) {
-    if (step == 0) AddDrawExperiments();
+    if (step == 0) AddCategoryExperiments();
     g_labelText = g_experiments[step].label;
     g_label = g_labelText.c_str();
     g_step = step + 1 < static_cast<int>(g_experiments.size()) ? step + 1 : -1;

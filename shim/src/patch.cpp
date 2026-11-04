@@ -48,8 +48,8 @@ bool InstallCallSiteHook(const CallSiteHook& hook) {
   int32_t rel = 0;
   std::memcpy(&rel, site + 1, 4);
   uintptr_t target = hook.site + 5 + rel;
-  if (site[0] != 0xE8 || target != hook.expectedTarget) {
-    Logf("[patch] REFUSED %s: site %08X is not `call %08X`\n", hook.name, hook.site, hook.expectedTarget);
+  if ((site[0] != 0xE8 && site[0] != 0xE9) || target != hook.expectedTarget) {
+    Logf("[patch] REFUSED %s: site %08X is not `call/jmp %08X`\n", hook.name, hook.site, hook.expectedTarget);
     return false;
   }
   if (std::memcmp(reinterpret_cast<const void*>(hook.expectedTarget), hook.guard, hook.guardSize) != 0) {

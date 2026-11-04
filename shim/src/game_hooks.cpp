@@ -9,6 +9,7 @@
 
 #include "log.h"
 #include "patch.h"
+#include "render_phase.h"
 #include "webgpu/backend.h"
 #include "widescreen.h"
 
@@ -124,6 +125,7 @@ void InstallGameHooks() {
     InstallCallSiteHook({"PlayMovie", site, kPlayMovie, kPlayMovieGuard, sizeof(kPlayMovieGuard),
                          reinterpret_cast<void*>(&Hook_PlayMovie)});
   InstallWidescreenPatches();
+  phase::InstallHooks();
 }
 
 }  // namespace agpu

@@ -88,16 +88,11 @@ enum : unsigned {
   kClearStencil = 32,         // start each frame's stencil at zero (D3D9 keeps it: test only)
 };
 void SetSkip(unsigned mask);
-// Identifies a draw across frames (same geometry, texture and type).
-struct DrawSignature {
-  UINT type = 0, first = 0, count = 0, texture = 0;
-  bool operator==(const DrawSignature&) const = default;
-};
-// Blended 3D draws without depth writes or stencil (minus TFACTOR fades) seen in the
-// last traced frame, one entry per signature.
-std::vector<DrawSignature> DecalCandidates();
-// Leaves out draws matching `sig` from the next frame on (nullptr: none).
-void SetSkipDraw(const DrawSignature* sig);
+// Leaves out draws of one phase::Category (render_phase.h) from the next frame on;
+// -1 for none.
+void SetSkipCategory(int category);
+// Bit per phase::Category that had draws in the last traced frame.
+uint32_t CategoriesInTrace();
 // Current D3D render state as the WebGPU backend tracked it.
 DWORD RenderState(D3DRENDERSTATETYPE state);
 DWORD TextureStageState(DWORD stage, D3DTEXTURESTAGESTATETYPE type);
