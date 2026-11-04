@@ -28,6 +28,8 @@ const Config& GetConfig() {
     c.validation = GetPrivateProfileIntW(L"renderer", L"validation", 0, ini.c_str()) != 0;
     c.profile = GetPrivateProfileIntW(L"renderer", L"profile", 0, ini.c_str()) != 0;
     c.compareSeconds = GetPrivateProfileIntW(L"renderer", L"compare", 0, ini.c_str());
+    c.clouds = GetPrivateProfileIntW(L"renderer", L"clouds", 0, ini.c_str()) % 3;
+    c.atmosphere = GetPrivateProfileIntW(L"renderer", L"atmosphere", 0, ini.c_str()) != 0;
     return c;
   }();
   return config;

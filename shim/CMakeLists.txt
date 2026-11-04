@@ -17,6 +17,8 @@ add_library(agpu_d3d9 SHARED
   src/mouse.cpp
   src/webgpu/backend.cpp
   src/webgpu/overlay.cpp
+  src/webgpu/clouds.cpp
+  src/webgpu/atmosphere.cpp
   src/compare.cpp
   src/call_profile.cpp
   src/render_phase.cpp

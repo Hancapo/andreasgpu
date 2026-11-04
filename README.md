@@ -46,6 +46,8 @@ record=1         ; write the draw-state logs above (costs CPU)
 fps=0            ; hide the FPS counter drawn over the WebGPU output (shown by default)
 profile=1        ; log a CPU time breakdown of the WebGPU backend every 600 frames
 validation=1     ; keep Dawn validation and shader bounds checks (slower; for debugging)
+clouds=1         ; volumetric clouds: 0 off, 1 over the game's clouds, 2 instead of them (F9 cycles)
+atmosphere=1     ; physical sky and aerial perspective (F8 toggles)
 ```
 
 **Comparison harness:** with `present=d3d9` and `mirror=1` both renderers draw every frame.
@@ -89,6 +91,26 @@ uniform that every generated shader declares as `game` (`@group(0) @binding(10)`
 game time, time step and frame counter; old/new weather and their blend, rain; wet roads, wind,
 underwater amount and the current area; the direction to the sun; the camera position. The log
 prints it as `[game]` lines and each frame trace starts with it.
+
+## Sky, atmosphere and volumetric clouds (WebGPU only)
+
+Both run at the scene-done callback, after the world, water and shadows and before effects and
+the HUD, so the scene depth is complete.
+
+- **Atmosphere** (`shim/src/webgpu/atmosphere.*`), after Hillaire 2020: Rayleigh, Mie and ozone
+  over a 6360 km planet; transmittance (256x64) and multiple-scattering (32x32) LUTs at startup,
+  a sky-view LUT (192x108) and an aerial-perspective volume (32x32x32, to 64 km) every frame. It
+  draws the sky and sun where the scene shows sky, adds aerial perspective over the geometry, and
+  blends back to the game's own night sky (moon, stars) as the sun sets.
+- **Clouds** (`shim/src/webgpu/clouds.*`), after Nubis (Schneider 2015/2017) with Hillaire's
+  scattering: generated Perlin-Worley shape (128^3) and Worley detail (32^3) noise with mips, a
+  weather map, blue noise; a half-resolution raymarch of the cloud shell against the scene depth
+  (cone light march, dual-lobe phase, multiple-scattering octaves); full-resolution temporal
+  reprojection. Coverage and cloud type follow the game's weather, drift its wind; sun
+  transmittance, sky ambient and aerial perspective come from the atmosphere.
+
+`agpu_clouds_test [folder] [notemporal]` compiles every atmosphere and cloud pipeline on a
+headless device and renders fixed scenes to PNGs (noon, sunset, overcast, from above...).
 
 ## Display fixes (in the shim)
 

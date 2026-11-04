@@ -28,6 +28,8 @@
 #include "log.h"
 #include "render_phase.h"
 #include "resources.h"
+#include "webgpu/atmosphere.h"
+#include "webgpu/clouds.h"
 #include "webgpu/ffshader.h"
 #include "webgpu/shader_translator.h"
 #include "webgpu/mirror.h"
@@ -224,6 +226,7 @@ struct Backend {
   UINT width = 0, height = 0;
   wgpu::Texture color, depth;
   wgpu::TextureView colorView, depthView;
+  wgpu::TextureView depthSampleView;  // depth aspect of `depth`, for passes that read it
 
   State state;
   std::unordered_map<const void*, Decl> decls;
@@ -308,6 +311,17 @@ struct Backend {
   };
   std::unordered_map<const void*, DepthSurface> depthSurfaces;
   DepthSurface* boundDepth = nullptr;
+  // Volumetric clouds (webgpu/clouds.h): mode as in config.h, drawn once per frame
+  // when the main RenderScene returns (phase::SetSceneDoneCallback).
+  int cloudsMode = 0;
+  bool cloudsReady = false;
+  // Physical sky and aerial perspective (webgpu/atmosphere.h), drawn at the same
+  // point before the clouds; the clouds need its LUTs either way.
+  bool atmosphereOn = false;
+  // The camera of the main pass's world draws this frame: what the scene depth was
+  // drawn with. Later effects in RenderScene may set their own view/projection.
+  bool sceneCameraValid = false;
+  D3DMATRIX sceneView{}, sceneProjection{};
   int skipCategory = -1;          // SetSkipCategory
   uint32_t categoriesTraced = 0;  // CategoriesInTrace
   // Draws per pass and category since the last stats line.
@@ -451,10 +465,15 @@ void CreateTargets(UINT width, UINT height) {
   g->color = g->device.CreateTexture(&desc);
   g->colorView = g->color.CreateView();
   desc.format = wgpu::TextureFormat::Depth24PlusStencil8;
-  desc.usage = wgpu::TextureUsage::RenderAttachment;
+  desc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding;
   g->depth = g->device.CreateTexture(&desc);
   g->depthView = g->depth.CreateView();
+  wgpu::TextureViewDescriptor depthOnly{};
+  depthOnly.aspect = wgpu::TextureAspect::DepthOnly;
+  g->depthSampleView = g->depth.CreateView(&depthOnly);
 }
+
+void DrawVolumetricClouds();  // below; registered as the scene-done callback
 
 // Bindings: 0 uniforms, 1..2k textures and samplers, 2k+1 VS constants, 2k+2 game data.
 constexpr int kBindEntries = 3 + 2 * kMaxTextureSlots;
@@ -586,6 +605,25 @@ struct V { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
                                                 }),
                         UINT64_MAX);
     g->fpsOverlay = ok;
+  }
+  {
+    g->device.PushErrorScope(wgpu::ErrorFilter::Validation);
+    bool ok = atmosphere::Init(g->device, g->queue, wgpu::TextureFormat::BGRA8Unorm) &&
+              clouds::Init(g->device, g->queue, wgpu::TextureFormat::BGRA8Unorm);
+    g->instance.WaitAny(g->device.PopErrorScope(wgpu::CallbackMode::WaitAnyOnly,
+                                                [&ok](wgpu::PopErrorScopeStatus, wgpu::ErrorType type,
+                                                      wgpu::StringView message) {
+                                                  if (type == wgpu::ErrorType::NoError) return;
+                                                  ok = false;
+                                                  Logf("[clouds] atmosphere and clouds disabled: %s\n",
+                                                       Str(message).c_str());
+                                                }),
+                        UINT64_MAX);
+    if (!ok) clouds::Shutdown(), atmosphere::Shutdown();
+    g->cloudsReady = ok;
+    g->cloudsMode = ok ? GetConfig().clouds : 0;
+    g->atmosphereOn = ok && GetConfig().atmosphere;
+    phase::SetSceneDoneCallback(&DrawVolumetricClouds);
   }
 }
 
@@ -1442,6 +1480,96 @@ bool SkippedByExperiment(const Decl& decl) {
   return false;
 }
 
+D3DMATRIX Inverse(const D3DMATRIX& m) {
+  const float* a = &m._11;
+  double inv[16];
+  inv[0] = a[5] * a[10] * a[15] - a[5] * a[11] * a[14] - a[9] * a[6] * a[15] + a[9] * a[7] * a[14] +
+           a[13] * a[6] * a[11] - a[13] * a[7] * a[10];
+  inv[4] = -a[4] * a[10] * a[15] + a[4] * a[11] * a[14] + a[8] * a[6] * a[15] - a[8] * a[7] * a[14] -
+           a[12] * a[6] * a[11] + a[12] * a[7] * a[10];
+  inv[8] = a[4] * a[9] * a[15] - a[4] * a[11] * a[13] - a[8] * a[5] * a[15] + a[8] * a[7] * a[13] +
+           a[12] * a[5] * a[11] - a[12] * a[7] * a[9];
+  inv[12] = -a[4] * a[9] * a[14] + a[4] * a[10] * a[13] + a[8] * a[5] * a[14] - a[8] * a[6] * a[13] -
+            a[12] * a[5] * a[10] + a[12] * a[6] * a[9];
+  inv[1] = -a[1] * a[10] * a[15] + a[1] * a[11] * a[14] + a[9] * a[2] * a[15] - a[9] * a[3] * a[14] -
+           a[13] * a[2] * a[11] + a[13] * a[3] * a[10];
+  inv[5] = a[0] * a[10] * a[15] - a[0] * a[11] * a[14] - a[8] * a[2] * a[15] + a[8] * a[3] * a[14] +
+           a[12] * a[2] * a[11] - a[12] * a[3] * a[10];
+  inv[9] = -a[0] * a[9] * a[15] + a[0] * a[11] * a[13] + a[8] * a[1] * a[15] - a[8] * a[3] * a[13] -
+           a[12] * a[1] * a[11] + a[12] * a[3] * a[9];
+  inv[13] = a[0] * a[9] * a[14] - a[0] * a[10] * a[13] - a[8] * a[1] * a[14] + a[8] * a[2] * a[13] +
+            a[12] * a[1] * a[10] - a[12] * a[2] * a[9];
+  inv[2] = a[1] * a[6] * a[15] - a[1] * a[7] * a[14] - a[5] * a[2] * a[15] + a[5] * a[3] * a[14] +
+           a[13] * a[2] * a[7] - a[13] * a[3] * a[6];
+  inv[6] = -a[0] * a[6] * a[15] + a[0] * a[7] * a[14] + a[4] * a[2] * a[15] - a[4] * a[3] * a[14] -
+           a[12] * a[2] * a[7] + a[12] * a[3] * a[6];
+  inv[10] = a[0] * a[5] * a[15] - a[0] * a[7] * a[13] - a[4] * a[1] * a[15] + a[4] * a[3] * a[13] +
+            a[12] * a[1] * a[7] - a[12] * a[3] * a[5];
+  inv[14] = -a[0] * a[5] * a[14] + a[0] * a[6] * a[13] + a[4] * a[1] * a[14] - a[4] * a[2] * a[13] -
+            a[12] * a[1] * a[6] + a[12] * a[2] * a[5];
+  inv[3] = -a[1] * a[6] * a[11] + a[1] * a[7] * a[10] + a[5] * a[2] * a[11] - a[5] * a[3] * a[10] -
+           a[9] * a[2] * a[7] + a[9] * a[3] * a[6];
+  inv[7] = a[0] * a[6] * a[11] - a[0] * a[7] * a[10] - a[4] * a[2] * a[11] + a[4] * a[3] * a[10] +
+           a[8] * a[2] * a[7] - a[8] * a[3] * a[6];
+  inv[11] = -a[0] * a[5] * a[11] + a[0] * a[7] * a[9] + a[4] * a[1] * a[11] - a[4] * a[3] * a[9] -
+            a[8] * a[1] * a[7] + a[8] * a[3] * a[5];
+  inv[15] = a[0] * a[5] * a[10] - a[0] * a[6] * a[9] - a[4] * a[1] * a[10] + a[4] * a[2] * a[9] +
+            a[8] * a[1] * a[6] - a[8] * a[2] * a[5];
+  double det = a[0] * inv[0] + a[1] * inv[4] + a[2] * inv[8] + a[3] * inv[12];
+  D3DMATRIX r{};
+  if (det == 0) return r;
+  float* o = &r._11;
+  for (int i = 0; i < 16; ++i) o[i] = static_cast<float>(inv[i] / det);
+  return r;
+}
+
+// After the main RenderScene: the atmosphere's per-frame LUTs, then its sky and aerial
+// perspective, then the clouds raymarched against the scene depth, all between
+// render passes of the main target.
+void DrawVolumetricClouds() {
+  if (!Active() || !g->cloudsReady || (!g->cloudsMode && !g->atmosphereOn)) return;
+  const State& s = g->state;
+  if (s.target || !s.depthBound || g->boundDepth) return;  // not the frame on screen
+  clouds::Frame f{};
+  // The world draws' camera, not whatever the last effect left set.
+  const D3DMATRIX& view = g->sceneCameraValid ? g->sceneView : s.view;
+  const D3DMATRIX& projection = g->sceneCameraValid ? g->sceneProjection : s.projection;
+  static unsigned checks = 0;
+  if (g->sceneCameraValid && ++checks % 600 == 1) {
+    float dv = 0, dp = 0;
+    for (int i = 0; i < 16; ++i) {
+      dv = std::max(dv, std::fabs((&view._11)[i] - (&s.view._11)[i]));
+      dp = std::max(dp, std::fabs((&projection._11)[i] - (&s.projection._11)[i]));
+    }
+    Logf("[clouds] camera at scene end vs world draws: view differs by %.4f, projection by %.4f\n", dv, dp);
+  }
+  D3DMATRIX viewProj = Multiply(view, projection);
+  D3DMATRIX inv = Inverse(viewProj);
+  std::memcpy(f.viewProj, &viewProj, sizeof(f.viewProj));
+  std::memcpy(f.invViewProj, &inv, sizeof(f.invViewProj));
+  D3DMATRIX invView = Inverse(view);
+  f.camera[0] = invView._41, f.camera[1] = invView._42, f.camera[2] = invView._43;
+  float fog[4];
+  ColorToFloats(s.rs[D3DRS_FOGCOLOR], fog);
+  std::memcpy(f.fogColor, fog, sizeof(f.fogColor));
+  f.fogEnd = AsFloat(s.rs[D3DRS_FOGEND]);
+  game::Read(&f.game);
+  f.atmosphere = g->atmosphereOn;
+  EndPass();
+  EnsureEncoder();
+  atmosphere::Frame af{};
+  std::memcpy(af.invViewProj, f.invViewProj, sizeof(af.invViewProj));
+  std::memcpy(af.camera, f.camera, sizeof(af.camera));
+  af.game = f.game;
+  atmosphere::Update(g->device, g->queue, g->encoder, af, g->width, g->height);
+  if (g->atmosphereOn) atmosphere::Apply(g->device, g->encoder, g->colorView, g->depthSampleView);
+  if (g->cloudsMode) {
+    clouds::Render(g->device, g->queue, g->encoder, f, g->width, g->height, g->depthSampleView);
+    clouds::Composite(g->device, g->encoder, g->colorView, g->depthSampleView);
+  }
+  if (g->tracing) g->trace += g->cloudsMode ? "     atmosphere and volumetric clouds\n" : "     atmosphere\n";
+}
+
 // Common draw path. `firstVertex`/`vertexCount` give the absolute vertex range the
 // draw reads (used to copy dynamic vertex data); `indices` is either nullptr
 // (non-indexed) or the 16-bit indices to draw, relative to `firstVertex`.
@@ -1467,9 +1595,20 @@ void Draw(D3DPRIMITIVETYPE type, UINT firstVertex, UINT vertexCount, const uint1
     }
   } traceExit{decl, type, firstVertex, indices ? indexCount : vertexCount};
   const int category = static_cast<int>(phase::CurrentCategory());
+  if (phase::CurrentPass() == phase::Pass::Main && !decl.pretransformed && !s.target) {
+    using phase::Category;
+    const auto c = static_cast<Category>(category);
+    if (c == Category::Building || c == Category::Road || c == Category::Vehicle || c == Category::Ped ||
+        c == Category::Object) {
+      g->sceneView = s.view;
+      g->sceneProjection = s.projection;
+      g->sceneCameraValid = true;
+    }
+  }
   ++g->phaseDraws[static_cast<int>(phase::CurrentPass())][category];
   if (g->tracing) g->categoriesTraced |= 1u << category;
-  if (category == g->skipCategory) {
+  if (category == g->skipCategory ||
+      (g->cloudsMode == 2 && category == static_cast<int>(phase::Category::Clouds))) {
     traceExit.outcome = "skipped";
     return;
   }
@@ -2365,6 +2504,27 @@ void ReportProfile(LARGE_INTEGER now, LARGE_INTEGER freq) {
 
 void Present() {
   if (!Active()) return;
+  g->sceneCameraValid = false;
+  // F9 (edge) in one of the game's windows cycles the cloud mode.
+  static bool f9WasDown = false;
+  DWORD fgProcess = 0;
+  GetWindowThreadProcessId(GetForegroundWindow(), &fgProcess);
+  bool f9 = (GetAsyncKeyState(VK_F9) & 0x8000) != 0 && fgProcess == GetCurrentProcessId();
+  if (f9 && !f9WasDown && g->cloudsReady) {
+    g->cloudsMode = (g->cloudsMode + 1) % 3;
+    clouds::ResetHistory();
+    static const char* const kModes[] = {"off", "over the game's clouds", "instead of the game's clouds"};
+    Logf("[clouds] volumetric clouds %s\n", kModes[g->cloudsMode]);
+  }
+  f9WasDown = f9;
+  static bool f8WasDown = false;
+  bool f8 = (GetAsyncKeyState(VK_F8) & 0x8000) != 0 && fgProcess == GetCurrentProcessId();
+  if (f8 && !f8WasDown && g->cloudsReady) {
+    g->atmosphereOn = !g->atmosphereOn;
+    clouds::ResetHistory();
+    Logf("[atmosphere] physical sky %s\n", g->atmosphereOn ? "on" : "off");
+  }
+  f8WasDown = f8;
   if (g->tracing) {
     g->trace.insert(0, "# game " + DescribeGameData() + "\n");
     WriteLogFile(g->traceName.c_str(), g->trace.data(), g->trace.size());
@@ -2482,6 +2642,15 @@ bool Start(HWND presentWindow, bool vsync) {
                                                  }),
                       UINT64_MAX);
   if (!g->adapter) return false;
+  {
+    wgpu::AdapterInfo info;
+    g->adapter.GetInfo(&info);
+    static const char* const kBackends[] = {"undefined", "null", "WebGPU", "D3D11", "D3D12", "Metal", "Vulkan",
+                                            "OpenGL", "OpenGLES"};
+    auto backend = static_cast<uint32_t>(info.backendType);
+    Logf("[mirror] adapter: %s (%s), Dawn backend %s\n", Str(info.device).c_str(), Str(info.description).c_str(),
+         backend < std::size(kBackends) ? kBackends[backend] : "?");
+  }
   wgpu::DeviceDescriptor deviceDesc{};
   wgpu::FeatureName features[] = {wgpu::FeatureName::TextureCompressionBC};
   deviceDesc.requiredFeatureCount = 1;
