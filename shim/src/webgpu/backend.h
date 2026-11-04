@@ -65,6 +65,9 @@ void DrawIndexedPrimitive(D3DPRIMITIVETYPE type, INT baseVertex, UINT minIndex, 
                           UINT primitiveCount);
 void StretchRect(IDirect3DSurface9* source, const RECT* sourceRect, IDirect3DSurface9* dest, const RECT* destRect);
 void Present();
+// The game's gamma ramp (brightness setting). D3D9 applies it at scanout and only in
+// fullscreen, so with the borderless window it is lost; the WebGPU blit applies it.
+void SetGammaRamp(const D3DGAMMARAMP* ramp);
 
 // The game is about to play an FMV in a DirectShow child window of the game window:
 // hide the WebGPU surface until the next presented frame.

@@ -254,11 +254,6 @@ HRESULT STDMETHODCALLTYPE DeviceProxy::SetDialogBoxMode(BOOL bEnableDialogs) {
   return real_->SetDialogBoxMode(bEnableDialogs);
 }
 
-void STDMETHODCALLTYPE DeviceProxy::SetGammaRamp(UINT iSwapChain, DWORD Flags, CONST D3DGAMMARAMP* pRamp) {
-  DeviceCallScope callScope(DeviceCall::SetGammaRamp);
-  return real_->SetGammaRamp(iSwapChain, Flags, pRamp);
-}
-
 void STDMETHODCALLTYPE DeviceProxy::GetGammaRamp(UINT iSwapChain, D3DGAMMARAMP* pRamp) {
   DeviceCallScope callScope(DeviceCall::GetGammaRamp);
   return real_->GetGammaRamp(iSwapChain, pRamp);

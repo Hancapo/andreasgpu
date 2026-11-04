@@ -270,6 +270,8 @@ struct Backend {
   wgpu::RenderPipeline blitPipeline;
   wgpu::BindGroupLayout blitLayout;
   wgpu::Sampler blitSampler;
+  wgpu::Texture gammaRamp;  // 256x1, the D3D9 gamma ramp (identity until the game sets one)
+  wgpu::TextureView gammaView;
 
   struct {
     unsigned draws = 0, drawn = 0, skippedShader = 0, skippedOther = 0, pipelinesCreated = 0, textureUploads = 0;
@@ -292,6 +294,16 @@ struct Backend {
 
   unsigned skipMask = 0;  // SetSkip (comparison experiments)
   bool depthHasStencil = true;  // the D3D9 depth-stencil format has stencil bits
+  bool autoDepthHasStencil = true;
+  // Depth-stencil surfaces other than the auto one (CreateDepthStencilSurface), by
+  // the game-visible proxy; `boundDepth` is the bound one, nullptr for the auto one.
+  struct DepthSurface {
+    wgpu::Texture texture;
+    wgpu::TextureView view;
+    UINT width = 0, height = 0;
+  };
+  std::unordered_map<const void*, DepthSurface> depthSurfaces;
+  DepthSurface* boundDepth = nullptr;
   bool skipDrawSet = false;  // SetSkipDraw
   DrawSignature skipDraw;
   std::vector<DrawSignature> decalCandidates;  // collected while tracing
@@ -408,6 +420,7 @@ void ResetState(BOOL autoDepth) {
   s.world = s.view = s.projection = Identity();
   s.viewport = {0, 0, g->width, g->height, 0.0f, 1.0f};
   s.depthBound = autoDepth != FALSE;
+  g->boundDepth = nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -487,15 +500,20 @@ void CreateFixedObjects() {
   const char* blit = R"(
 @group(0) @binding(0) var t: texture_2d<f32>;
 @group(0) @binding(1) var s: sampler;
+@group(0) @binding(2) var ramp: texture_2d<f32>;
 struct V { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
 @vertex fn vs(@builtin(vertex_index) i: u32) -> V {
   let p = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
   return V(vec4f(p * vec2f(2.0, -2.0) + vec2f(-1.0, 1.0), 0.0, 1.0), p);
 }
-@fragment fn fs(v: V) -> @location(0) vec4f { return vec4f(textureSample(t, s, v.uv).rgb, 1.0); }
+@fragment fn fs(v: V) -> @location(0) vec4f {
+  let i = vec3u(round(saturate(textureSample(t, s, v.uv).rgb) * 255.0));
+  return vec4f(textureLoad(ramp, vec2u(i.r, 0u), 0).r, textureLoad(ramp, vec2u(i.g, 0u), 0).g,
+               textureLoad(ramp, vec2u(i.b, 0u), 0).b, 1.0);
+}
 )";
   wgpu::ShaderModule module = ModuleFromWgsl(blit);
-  wgpu::BindGroupLayoutEntry blitEntries[2] = {};
+  wgpu::BindGroupLayoutEntry blitEntries[3] = {};
   blitEntries[0].binding = 0;
   blitEntries[0].visibility = wgpu::ShaderStage::Fragment;
   blitEntries[0].texture.sampleType = wgpu::TextureSampleType::Float;
@@ -503,8 +521,12 @@ struct V { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
   blitEntries[1].binding = 1;
   blitEntries[1].visibility = wgpu::ShaderStage::Fragment;
   blitEntries[1].sampler.type = wgpu::SamplerBindingType::Filtering;
+  blitEntries[2].binding = 2;
+  blitEntries[2].visibility = wgpu::ShaderStage::Fragment;
+  blitEntries[2].texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
+  blitEntries[2].texture.viewDimension = wgpu::TextureViewDimension::e2D;
   wgpu::BindGroupLayoutDescriptor blitLayoutDesc{};
-  blitLayoutDesc.entryCount = 2;
+  blitLayoutDesc.entryCount = 3;
   blitLayoutDesc.entries = blitEntries;
   g->blitLayout = g->device.CreateBindGroupLayout(&blitLayoutDesc);
   wgpu::PipelineLayoutDescriptor blitPipelineLayoutDesc{};
@@ -526,6 +548,13 @@ struct V { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
   wgpu::SamplerDescriptor samplerDesc{};
   samplerDesc.magFilter = samplerDesc.minFilter = wgpu::FilterMode::Linear;
   g->blitSampler = g->device.CreateSampler(&samplerDesc);
+  wgpu::TextureDescriptor rampDesc{};
+  rampDesc.size = {256, 1, 1};
+  rampDesc.format = wgpu::TextureFormat::RGBA8Unorm;
+  rampDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+  g->gammaRamp = g->device.CreateTexture(&rampDesc);
+  g->gammaView = g->gammaRamp.CreateView();
+  SetGammaRamp(nullptr);
   // A broken overlay pipeline would invalidate every frame's commands: verify it.
   if (GetConfig().fps) {
     g->device.PushErrorScope(wgpu::ErrorFilter::Validation);
@@ -631,7 +660,9 @@ bool MapTextureFormat(D3DFORMAT f, Texture* t) {
     case D3DFMT_R8G8B8:
     case D3DFMT_L8:
     case D3DFMT_A8:
-    case D3DFMT_A8L8: t->convert = true; return true;
+    case D3DFMT_A8L8:
+    case D3DFMT_A2R10G10B10:  // render targets in the game's 10-bit video modes
+    case D3DFMT_A2B10G10R10: t->convert = true; return true;
     default: return false;
   }
 }
@@ -661,6 +692,15 @@ uint32_t ConvertTexel(D3DFORMAT f, const uint8_t* p) {
     case D3DFMT_L8: r = gr = b = p[0]; break;
     case D3DFMT_A8: r = gr = b = 255, a = p[0]; break;
     case D3DFMT_A8L8: r = gr = b = p[0], a = p[1]; break;
+    case D3DFMT_A2R10G10B10:
+    case D3DFMT_A2B10G10R10: {
+      uint32_t v = p[0] | (p[1] << 8) | (p[2] << 16) | (uint32_t(p[3]) << 24);
+      uint32_t lo = expand(v & 0x3FF, 10), mid = expand((v >> 10) & 0x3FF, 10), hi = expand((v >> 20) & 0x3FF, 10);
+      a = expand(v >> 30, 2), gr = mid;
+      if (f == D3DFMT_A2R10G10B10) b = lo, r = hi;
+      else r = lo, b = hi;
+      break;
+    }
     default: r = gr = b = 255; break;
   }
   return (a << 24) | (r << 16) | (gr << 8) | b;
@@ -671,6 +711,8 @@ UINT BytesPerTexel(D3DFORMAT f) {
     case D3DFMT_R8G8B8: return 3;
     case D3DFMT_L8:
     case D3DFMT_A8: return 1;
+    case D3DFMT_A2R10G10B10:
+    case D3DFMT_A2B10G10R10: return 4;
     default: return 2;
   }
 }
@@ -713,10 +755,12 @@ void BeginPass(DWORD clearFlags, D3DCOLOR color, float z, DWORD stencil) {
   ColorToFloats(color, c);
   colorAttachment.clearValue = {c[0], c[1], c[2], c[3]};
   wgpu::RenderPassDepthStencilAttachment depthAttachment{};
-  // The auto depth buffer only fits targets of the back-buffer size.
-  bool useDepth = g->state.depthBound && width == g->width && height == g->height;
+  // WebGPU needs the depth attachment to match the target's size (D3D9 allows larger).
+  UINT depthWidth = g->boundDepth ? g->boundDepth->width : g->width;
+  UINT depthHeight = g->boundDepth ? g->boundDepth->height : g->height;
+  bool useDepth = g->state.depthBound && width == depthWidth && height == depthHeight;
   if (useDepth) {
-    depthAttachment.view = g->depthView;
+    depthAttachment.view = g->boundDepth ? g->boundDepth->view : g->depthView;
     depthAttachment.depthLoadOp = (clearFlags & D3DCLEAR_ZBUFFER) ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load;
     depthAttachment.depthStoreOp = wgpu::StoreOp::Store;
     depthAttachment.depthClearValue = std::clamp(z, 0.0f, 1.0f);
@@ -1646,14 +1690,16 @@ void SubmitFrame() {
     if (!canPresent) g->surfaceConfigured = false;
   }
   if (canPresent) {
-    wgpu::BindGroupEntry entries[2] = {};
+    wgpu::BindGroupEntry entries[3] = {};
     entries[0].binding = 0;
     entries[0].textureView = g->colorView;
     entries[1].binding = 1;
     entries[1].sampler = g->blitSampler;
+    entries[2].binding = 2;
+    entries[2].textureView = g->gammaView;
     wgpu::BindGroupDescriptor bgDesc{};
     bgDesc.layout = g->blitLayout;
-    bgDesc.entryCount = 2;
+    bgDesc.entryCount = 3;
     bgDesc.entries = entries;
     wgpu::BindGroup bindGroup = g->device.CreateBindGroup(&bgDesc);
     wgpu::RenderPassColorAttachment color{};
@@ -1785,6 +1831,8 @@ void ResetDevice(UINT width, UINT height, BOOL autoDepth, D3DFORMAT depthFormat)
   bool hadStencil = g->depthHasStencil;
   g->depthHasStencil = depthFormat == D3DFMT_D24S8 || depthFormat == D3DFMT_D24X4S4 ||
                        depthFormat == D3DFMT_D15S1 || depthFormat == D3DFMT_D24FS8;
+  g->autoDepthHasStencil = g->depthHasStencil;
+  g->depthSurfaces.clear();  // D3D9 requires default-pool surfaces released before Reset
   if (g->depthHasStencil != hadStencil)
     Logf("[webgpu] depth format %u %s stencil: stencil tests %s\n", depthFormat,
          g->depthHasStencil ? "has" : "has no", g->depthHasStencil ? "enabled" : "always pass, like D3D9");
@@ -2061,10 +2109,32 @@ void SetRenderTarget(DWORD index, IDirect3DSurface9* surface) {
 void SetDepthStencilSurface(IDirect3DSurface9* surface) {
   if (!Active()) return;
   bool bound = surface != nullptr;
-  if (bound != g->state.depthBound) {
+  Backend::DepthSurface* depth = nullptr;
+  bool hasStencil = g->autoDepthHasStencil;
+  D3DSURFACE_DESC desc{};
+  if (surface && SUCCEEDED(surface->GetDesc(&desc)) && (desc.Width != g->width || desc.Height != g->height)) {
+    // Not the auto depth buffer: its own texture, made on first use.
+    Backend::DepthSurface& d = g->depthSurfaces[surface];
+    if (!d.texture || d.width != desc.Width || d.height != desc.Height) {
+      wgpu::TextureDescriptor td{};
+      td.size = {desc.Width, desc.Height, 1};
+      td.format = wgpu::TextureFormat::Depth24PlusStencil8;
+      td.usage = wgpu::TextureUsage::RenderAttachment;
+      d.texture = g->device.CreateTexture(&td);
+      d.view = d.texture.CreateView();
+      d.width = desc.Width;
+      d.height = desc.Height;
+    }
+    depth = &d;
+    hasStencil = desc.Format == D3DFMT_D24S8 || desc.Format == D3DFMT_D24X4S4 || desc.Format == D3DFMT_D15S1 ||
+                 desc.Format == D3DFMT_D24FS8;
+  }
+  if (bound != g->state.depthBound || depth != g->boundDepth) {
     EndPass();
     g->state.depthBound = bound;
+    g->boundDepth = depth;
   }
+  g->depthHasStencil = hasStencil;
 }
 
 void Clear(DWORD flags, D3DCOLOR color, float z, DWORD stencil) {
@@ -2179,6 +2249,26 @@ void MovieStarting() {
   if (!Active() || !g->gameWindow || g->surfaceHidden) return;
   ShowWindow(g->window, SW_HIDE);
   g->surfaceHidden = true;
+}
+
+void SetGammaRamp(const D3DGAMMARAMP* ramp) {
+  if (!g || !g->gammaRamp) return;
+  uint8_t texels[256 * 4];
+  for (int i = 0; i < 256; ++i) {
+    texels[i * 4 + 0] = static_cast<uint8_t>(ramp ? ramp->red[i] >> 8 : i);
+    texels[i * 4 + 1] = static_cast<uint8_t>(ramp ? ramp->green[i] >> 8 : i);
+    texels[i * 4 + 2] = static_cast<uint8_t>(ramp ? ramp->blue[i] >> 8 : i);
+    texels[i * 4 + 3] = 255;
+  }
+  if (ramp)
+    Logf("[webgpu] gamma ramp set: red 0x%04X 0x%04X 0x%04X at 64/128/192\n", ramp->red[64], ramp->red[128],
+         ramp->red[192]);
+  wgpu::TexelCopyTextureInfo dst{};
+  dst.texture = g->gammaRamp;
+  wgpu::TexelCopyBufferLayout layout{};
+  layout.bytesPerRow = sizeof(texels);
+  wgpu::Extent3D size{256, 1, 1};
+  g->queue.WriteTexture(&dst, texels, sizeof(texels), &layout, &size);
 }
 
 void SetSkip(unsigned mask) {

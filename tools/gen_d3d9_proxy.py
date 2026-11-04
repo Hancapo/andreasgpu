@@ -25,7 +25,7 @@ CUSTOM = {
         'DrawPrimitiveUP', 'DrawIndexedPrimitiveUP', 'CreateVertexDeclaration',
         'SetVertexDeclaration', 'SetFVF', 'CreateVertexShader', 'SetVertexShader',
         'SetStreamSource', 'CreatePixelShader', 'SetPixelShader', 'SetMaterial', 'SetViewport',
-        'SetIndices', 'SetVertexShaderConstantF', 'SetPixelShaderConstantF',
+        'SetIndices', 'SetVertexShaderConstantF', 'SetPixelShaderConstantF', 'SetGammaRamp',
     },
     # Resource proxies: identity/lifetime and the Lock/Unlock data path.
     'IDirect3DTexture9': {'QueryInterface', 'AddRef', 'Release', 'GetDevice', 'LockRect', 'UnlockRect'},

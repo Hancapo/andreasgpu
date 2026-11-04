@@ -182,6 +182,12 @@ HRESULT STDMETHODCALLTYPE DeviceProxy::Present(CONST RECT* pSourceRect, CONST RE
   return hr;
 }
 
+void STDMETHODCALLTYPE DeviceProxy::SetGammaRamp(UINT iSwapChain, DWORD Flags, CONST D3DGAMMARAMP* pRamp) {
+  COUNT(SetGammaRamp);
+  if (pRamp && iSwapChain == 0) wgb::SetGammaRamp(pRamp);
+  real_->SetGammaRamp(iSwapChain, Flags, pRamp);
+}
+
 HRESULT STDMETHODCALLTYPE DeviceProxy::CreateTexture(UINT Width, UINT Height, UINT Levels, DWORD Usage,
                                                      D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9** ppTexture,
                                                      HANDLE* pSharedHandle) {

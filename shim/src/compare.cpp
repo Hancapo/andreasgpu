@@ -86,7 +86,8 @@ bool ReadBackBuffer(IDirect3DDevice9* device, Image* out) {
       source = resolved;
   }
   IDirect3DSurface9* sysmem = nullptr;
-  if ((desc.Format == D3DFMT_X8R8G8B8 || desc.Format == D3DFMT_A8R8G8B8) &&
+  const bool tenBit = desc.Format == D3DFMT_A2R10G10B10;  // the game's 10-bit video modes
+  if ((desc.Format == D3DFMT_X8R8G8B8 || desc.Format == D3DFMT_A8R8G8B8 || tenBit) &&
       SUCCEEDED(device->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format, D3DPOOL_SYSTEMMEM, &sysmem,
                                                     nullptr)) &&
       SUCCEEDED(device->GetRenderTargetData(source, sysmem))) {
@@ -95,9 +96,23 @@ bool ReadBackBuffer(IDirect3DDevice9* device, Image* out) {
       out->width = desc.Width;
       out->height = desc.Height;
       out->bgra.resize(static_cast<size_t>(desc.Width) * desc.Height * 4);
-      for (UINT y = 0; y < desc.Height; ++y)
-        memcpy(out->bgra.data() + static_cast<size_t>(y) * desc.Width * 4,
-               static_cast<const uint8_t*>(locked.pBits) + static_cast<size_t>(y) * locked.Pitch, desc.Width * 4);
+      for (UINT y = 0; y < desc.Height; ++y) {
+        const uint8_t* row = static_cast<const uint8_t*>(locked.pBits) + static_cast<size_t>(y) * locked.Pitch;
+        uint8_t* dst = out->bgra.data() + static_cast<size_t>(y) * desc.Width * 4;
+        if (!tenBit) {
+          memcpy(dst, row, desc.Width * 4);
+          continue;
+        }
+        for (UINT x = 0; x < desc.Width; ++x) {
+          uint32_t v;
+          memcpy(&v, row + x * 4, 4);
+          auto to8 = [](uint32_t c) { return static_cast<uint8_t>((c * 255 + 511) / 1023); };
+          dst[x * 4 + 0] = to8(v & 0x3FF);
+          dst[x * 4 + 1] = to8((v >> 10) & 0x3FF);
+          dst[x * 4 + 2] = to8((v >> 20) & 0x3FF);
+          dst[x * 4 + 3] = static_cast<uint8_t>((v >> 30) * 85);
+        }
+      }
       sysmem->UnlockRect();
       ok = true;
     }
