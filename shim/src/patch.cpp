@@ -48,11 +48,24 @@ bool InstallCallSiteHook(const CallSiteHook& hook) {
   int32_t rel = 0;
   std::memcpy(&rel, site + 1, 4);
   uintptr_t target = hook.site + 5 + rel;
-  if ((site[0] != 0xE8 && site[0] != 0xE9) || target != hook.expectedTarget) {
+  bool chained = target != hook.expectedTarget;
+  if ((site[0] != 0xE8 && site[0] != 0xE9) || (chained && !hook.previous)) {
     Logf("[patch] REFUSED %s: site %08X is not `call/jmp %08X`\n", hook.name, hook.site, hook.expectedTarget);
     return false;
   }
-  if (std::memcmp(reinterpret_cast<const void*>(hook.expectedTarget), hook.guard, hook.guardSize) != 0) {
+  if (chained) {
+    // Another mod redirected the site: chain only to committed executable code.
+    MEMORY_BASIC_INFORMATION mbi{};
+    const DWORD exec = PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    if (!VirtualQuery(reinterpret_cast<const void*>(target), &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT ||
+        !(mbi.Protect & exec)) {
+      Logf("[patch] REFUSED %s: site %08X calls %08X, which is not code\n", hook.name, hook.site, target);
+      return false;
+    }
+  }
+  // The original target confirms the build; another mod's `jmp` at its start is fine.
+  auto original = reinterpret_cast<const uint8_t*>(hook.expectedTarget);
+  if (std::memcmp(original, hook.guard, hook.guardSize) != 0 && !(original[0] == 0xE9 && hook.guard[0] != 0xE9)) {
     Logf("[patch] REFUSED %s: guard bytes differ at %08X\n", hook.name, hook.expectedTarget);
     return false;
   }
@@ -61,7 +74,11 @@ bool InstallCallSiteHook(const CallSiteHook& hook) {
     Logf("[patch] FAILED %s: VirtualProtect\n", hook.name);
     return false;
   }
-  Logf("[patch] installed %s at %08X\n", hook.name, hook.site);
+  if (hook.previous) *hook.previous = target;
+  if (chained)
+    Logf("[patch] installed %s at %08X, chained after another mod's hook at %08X\n", hook.name, hook.site, target);
+  else
+    Logf("[patch] installed %s at %08X\n", hook.name, hook.site);
   return true;
 }
 
