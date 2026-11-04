@@ -290,6 +290,14 @@ struct Backend {
   LARGE_INTEGER warmupStart{};
   bool warmupDone = true;
 
+  unsigned skipMask = 0;  // SetSkip (comparison experiments)
+  bool depthHasStencil = true;  // the D3D9 depth-stencil format has stencil bits
+  bool skipDrawSet = false;  // SetSkipDraw
+  DrawSignature skipDraw;
+  std::vector<DrawSignature> decalCandidates;  // collected while tracing
+  // First depth pass of the frame not begun yet (kClearStencil experiment).
+  bool stencilFresh = true;
+
   // Frame trace (RequestTrace): armed for the next frame, written at its Present.
   std::wstring traceName;
   bool traceArmed = false, tracing = false;
@@ -712,7 +720,11 @@ void BeginPass(DWORD clearFlags, D3DCOLOR color, float z, DWORD stencil) {
     depthAttachment.depthLoadOp = (clearFlags & D3DCLEAR_ZBUFFER) ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load;
     depthAttachment.depthStoreOp = wgpu::StoreOp::Store;
     depthAttachment.depthClearValue = std::clamp(z, 0.0f, 1.0f);
-    depthAttachment.stencilLoadOp = (clearFlags & D3DCLEAR_STENCIL) ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load;
+    bool freshStencil = g->stencilFresh && (g->skipMask & kClearStencil);
+    depthAttachment.stencilLoadOp =
+        (clearFlags & D3DCLEAR_STENCIL) || freshStencil ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load;
+    if (!(clearFlags & D3DCLEAR_STENCIL)) stencil = 0;
+    g->stencilFresh = false;
     depthAttachment.stencilStoreOp = wgpu::StoreOp::Store;
     depthAttachment.stencilClearValue = stencil & 0xFF;
   }
@@ -1240,7 +1252,7 @@ bool BuildKey(const Decl& decl, D3DPRIMITIVETYPE type, bool indexed, PipelineKey
     k.zEnable = rs[D3DRS_ZENABLE] != D3DZB_FALSE;
     k.zWrite = rs[D3DRS_ZWRITEENABLE] != 0;
     k.zFunc = static_cast<uint8_t>(rs[D3DRS_ZFUNC]);
-    k.stencilEnable = rs[D3DRS_STENCILENABLE] != 0;
+    k.stencilEnable = rs[D3DRS_STENCILENABLE] != 0 && g->depthHasStencil;
     if (k.stencilEnable) {
       k.sFunc = static_cast<uint8_t>(rs[D3DRS_STENCILFUNC]);
       k.sPass = static_cast<uint8_t>(rs[D3DRS_STENCILPASS]);
@@ -1290,7 +1302,7 @@ size_t Stage(std::vector<uint8_t>& ring, size_t capacity, bool& grow, const void
 void TraceDraw(const Decl& decl, D3DPRIMITIVETYPE type, UINT firstVertex, UINT count, const char* outcome) {
   const State& s = g->state;
   const DWORD* rs = s.rs;
-  char line[512];
+  char line[1024];
   int n = snprintf(line, sizeof(line), "%4u %-9s type=%u first=%u count=%u pre=%d", g->traceDraw++, outcome,
                    static_cast<unsigned>(type), firstVertex, count, decl.pretransformed);
   // First vertex position (dynamic streams only: their bytes are in the shadow).
@@ -1315,8 +1327,53 @@ void TraceDraw(const Decl& decl, D3DPRIMITIVETYPE type, UINT firstVertex, UINT c
                 rs[D3DRS_ALPHAFUNC], rs[D3DRS_ALPHAREF], rs[D3DRS_STENCILENABLE], t0 ? t0->id : 0,
                 t0 ? t0->width : 0, t0 ? t0->height : 0, s.viewport.X, s.viewport.Y, s.viewport.Width,
                 s.viewport.Height, s.viewport.MinZ, s.viewport.MaxZ);
-  n += snprintf(line + n, sizeof(line) - n, " | pass %ux%u depth=%d", g->passWidth, g->passHeight, g->passHasDepth);
+  n += snprintf(line + n, sizeof(line) - n, " | pass %ux%u depth=%d cull=%lu", g->passWidth, g->passHeight,
+                g->passHasDepth, rs[D3DRS_CULLMODE]);
+  for (int i = 0; i < 2; ++i) {
+    const DWORD* t = s.tss[i];
+    if (t[D3DTSS_COLOROP] == D3DTOP_DISABLE) break;
+    n += snprintf(line + n, sizeof(line) - n, " | st%d c=%lu(%lX,%lX) a=%lu(%lX,%lX) tci=%lX addr=%lu/%lu", i,
+                  t[D3DTSS_COLOROP], t[D3DTSS_COLORARG1], t[D3DTSS_COLORARG2], t[D3DTSS_ALPHAOP],
+                  t[D3DTSS_ALPHAARG1], t[D3DTSS_ALPHAARG2], t[D3DTSS_TEXCOORDINDEX], s.samp[i][D3DSAMP_ADDRESSU],
+                  s.samp[i][D3DSAMP_ADDRESSV]);
+  }
+  n += snprintf(line + n, sizeof(line) - n, " tf=%08lX", rs[D3DRS_TEXTUREFACTOR]);
+  // Where the geometry comes from and where it is placed.
+  const State::Stream& st0 = s.streams[0];
+  Buffer* vb = BufferOf(st0.buffer);
+  Buffer* ib = BufferOf(s.indices);
+  n += snprintf(line + n, sizeof(line) - n,
+                " | vb=%p len=%u dyn=%d off=%u stride=%u ib=%p | world t=(%.1f %.1f %.1f) diag=(%.2f %.2f %.2f)",
+                static_cast<void*>(st0.buffer), vb ? vb->length : 0, vb ? vb->dynamic : 0, st0.offset, st0.stride,
+                static_cast<void*>(s.indices), s.world.m[3][0], s.world.m[3][1], s.world.m[3][2], s.world.m[0][0],
+                s.world.m[1][1], s.world.m[2][2]);
+  (void)ib;
+  if (rs[D3DRS_STENCILENABLE])
+    n += snprintf(line + n, sizeof(line) - n,
+                  " | stencil func=%lu pass=%lu fail=%lu zfail=%lu ref=%lu mask=%lX wmask=%lX two=%lu ccw %lu/%lu/%lu/%lu",
+                  rs[D3DRS_STENCILFUNC], rs[D3DRS_STENCILPASS], rs[D3DRS_STENCILFAIL], rs[D3DRS_STENCILZFAIL],
+                  rs[D3DRS_STENCILREF], rs[D3DRS_STENCILMASK], rs[D3DRS_STENCILWRITEMASK],
+                  rs[D3DRS_TWOSIDEDSTENCILMODE], rs[D3DRS_CCW_STENCILFUNC], rs[D3DRS_CCW_STENCILPASS],
+                  rs[D3DRS_CCW_STENCILFAIL], rs[D3DRS_CCW_STENCILZFAIL]);
   g->trace.append(line, n).append("\n");
+}
+
+bool SkippedByExperiment(const Decl& decl) {
+  const State& s = g->state;
+  bool stencil = s.rs[D3DRS_STENCILENABLE] != 0;
+  if ((g->skipMask & kSkipStencilQuad) && stencil && decl.pretransformed) return true;
+  if ((g->skipMask & kSkipStencilVolumes) && stencil && !decl.pretransformed) return true;
+  bool blended3d = !decl.pretransformed && s.rs[D3DRS_ALPHABLENDENABLE];
+  if ((g->skipMask & kSkipAdditive) && blended3d && s.rs[D3DRS_DESTBLEND] == D3DBLEND_ONE) return true;
+  if ((g->skipMask & kSkipFades) && blended3d && s.tss[1][D3DTSS_COLOROP] == D3DTOP_MODULATE &&
+      s.tss[1][D3DTSS_COLORARG2] == D3DTA_TFACTOR)
+    return true;
+  if ((g->skipMask & kSkipDecals) && blended3d && !s.rs[D3DRS_ZWRITEENABLE] && !stencil) return true;
+  if (g->skipMask & kSkipShadowTextures) {
+    Texture* t = TextureOf(s.textures[0]);
+    if (t && t->renderTarget && !decl.pretransformed) return true;
+  }
+  return false;
 }
 
 // Common draw path. `firstVertex`/`vertexCount` give the absolute vertex range the
@@ -1343,6 +1400,23 @@ void Draw(D3DPRIMITIVETYPE type, UINT firstVertex, UINT vertexCount, const uint1
       if (g->tracing) TraceDraw(decl, type, first, count, outcome);
     }
   } traceExit{decl, type, firstVertex, indices ? indexCount : vertexCount};
+  if (g->tracing || g->skipDrawSet) {
+    Texture* t0 = TextureOf(s.textures[0]);
+    DrawSignature sig{static_cast<UINT>(type), firstVertex, indices ? indexCount : vertexCount, t0 ? t0->id : 0};
+    if (g->skipDrawSet && sig == g->skipDraw) {
+      traceExit.outcome = "skipped";
+      return;
+    }
+    bool decal = !decl.pretransformed && s.rs[D3DRS_ALPHABLENDENABLE] && !s.rs[D3DRS_ZWRITEENABLE] &&
+                 !s.rs[D3DRS_STENCILENABLE] &&
+                 !(s.tss[1][D3DTSS_COLOROP] == D3DTOP_MODULATE && s.tss[1][D3DTSS_COLORARG2] == D3DTA_TFACTOR);
+    auto& c = g->decalCandidates;
+    if (g->tracing && decal && c.size() < 24 && std::find(c.begin(), c.end(), sig) == c.end()) c.push_back(sig);
+  }
+  if (g->skipMask && SkippedByExperiment(decl)) {
+    traceExit.outcome = "skipped";
+    return;
+  }
   EnsurePass();
   bool indexed = indices || staticIndexBuffer;
   PipelineKey key;
@@ -1706,8 +1780,14 @@ bool CreateSurface() {
 
 bool Active() { return g && g->active; }
 
-void ResetDevice(UINT width, UINT height, BOOL autoDepth) {
+void ResetDevice(UINT width, UINT height, BOOL autoDepth, D3DFORMAT depthFormat) {
   if (!g || !g->device) return;
+  bool hadStencil = g->depthHasStencil;
+  g->depthHasStencil = depthFormat == D3DFMT_D24S8 || depthFormat == D3DFMT_D24X4S4 ||
+                       depthFormat == D3DFMT_D15S1 || depthFormat == D3DFMT_D24FS8;
+  if (g->depthHasStencil != hadStencil)
+    Logf("[webgpu] depth format %u %s stencil: stencil tests %s\n", depthFormat,
+         g->depthHasStencil ? "has" : "has no", g->depthHasStencil ? "enabled" : "always pass, like D3D9");
   EndPass();
   CreateTargets(width, height);
   ResetState(autoDepth);
@@ -2101,6 +2181,26 @@ void MovieStarting() {
   g->surfaceHidden = true;
 }
 
+void SetSkip(unsigned mask) {
+  if (Active()) g->skipMask = mask;
+}
+
+std::vector<DrawSignature> DecalCandidates() { return Active() ? g->decalCandidates : std::vector<DrawSignature>{}; }
+
+void SetSkipDraw(const DrawSignature* sig) {
+  if (!Active()) return;
+  g->skipDrawSet = sig != nullptr;
+  if (sig) g->skipDraw = *sig;
+}
+
+DWORD RenderState(D3DRENDERSTATETYPE state) {
+  return Active() && static_cast<unsigned>(state) < 256 ? g->state.rs[state] : 0;
+}
+
+DWORD TextureStageState(DWORD stage, D3DTEXTURESTAGESTATETYPE type) {
+  return Active() && stage < 8 && static_cast<unsigned>(type) < 33 ? g->state.tss[stage][type] : 0;
+}
+
 void RequestTrace(const wchar_t* name) {
   if (!Active()) return;
   g->traceName = name;
@@ -2155,6 +2255,7 @@ void Present() {
     g->traceArmed = false;
     g->tracing = true;
     g->traceDraw = 0;
+    g->decalCandidates.clear();
   }
   {
     ProfScope prof(kProfSubmit);
@@ -2169,6 +2270,7 @@ void Present() {
     ProfScope prof(kProfEvents);
     g->instance.ProcessEvents();
   }
+  g->stencilFresh = true;
   LARGE_INTEGER now, freq;
   QueryPerformanceCounter(&now);
   QueryPerformanceFrequency(&freq);
@@ -2249,6 +2351,28 @@ bool Start(HWND presentWindow, bool vsync) {
   wgpu::FeatureName features[] = {wgpu::FeatureName::TextureCompressionBC};
   deviceDesc.requiredFeatureCount = 1;
   deviceDesc.requiredFeatures = features;
+  // The command stream is ours and fixed, so by default skip Dawn's per-command
+  // validation and the bounds checks it adds to shaders. validation=1 keeps both;
+  // dawn_toggles=a,b picks Dawn device toggles explicitly.
+  std::vector<std::string> toggleNames;
+  if (!GetConfig().dawnToggles.empty()) {
+    std::string list = GetConfig().dawnToggles;
+    for (size_t at = 0; at <= list.size();) {
+      size_t end = std::min(list.find(',', at), list.size());
+      if (end > at) toggleNames.push_back(list.substr(at, end - at));
+      at = end + 1;
+    }
+  } else if (!GetConfig().validation) {
+    toggleNames = {"skip_validation", "disable_robustness"};
+  }
+  std::vector<const char*> togglePtrs;
+  std::string toggleLog;
+  for (const std::string& t : toggleNames) togglePtrs.push_back(t.c_str()), toggleLog += " " + t;
+  wgpu::DawnTogglesDescriptor toggles{};
+  toggles.enabledToggleCount = togglePtrs.size();
+  toggles.enabledToggles = togglePtrs.data();
+  if (!togglePtrs.empty()) deviceDesc.nextInChain = &toggles;
+  Logf("[webgpu] Dawn toggles:%s\n", toggleLog.empty() ? " (none)" : toggleLog.c_str());
   deviceDesc.SetDeviceLostCallback(
       wgpu::CallbackMode::AllowSpontaneous,
       [](const wgpu::Device&, wgpu::DeviceLostReason reason, wgpu::StringView message) {

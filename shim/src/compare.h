@@ -13,4 +13,10 @@ namespace agpu::compare {
 void BeforePresent(IDirect3DDevice9* real, HWND window);
 void AfterPresent();
 
+// Probes for the frame being drawn (mirror-mode sweep, both renderers):
+// paint each pixel's stencil value instead of the game's shadow darkening quad,
+bool StencilView();
+// and clear the stencil together with every depth clear.
+bool ClearStencil();
+
 }  // namespace agpu::compare

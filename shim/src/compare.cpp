@@ -23,6 +23,51 @@ struct Image {
 bool g_pending = false;
 Image g_d3d9;
 unsigned g_index = 0;
+
+// F10 in mirror mode runs these on consecutive frames. Most leave a group of draws
+// out of the WebGPU frame (wgb::SetSkip / SetSkipDraw) and compare it with the full
+// D3D9 frame; the stencil probes change both renderers alike.
+struct Experiment {
+  std::string label;
+  unsigned skip = 0;
+  bool stencilView = false, clearStencil = false;
+  bool skipDraw = false;
+  wgb::DrawSignature draw;
+};
+std::vector<Experiment> g_experiments;
+int g_step = -1;  // experiment active in the frame being drawn, -1 when idle
+std::string g_labelText;
+const char* g_label = "";
+
+void StartExperiments() {
+  g_experiments = {
+      {"normal"},
+      {"stencil view (0 blue, 1 red, 2 green, 3 yellow, 4+ magenta, -1 cyan, -2 orange, other negative white)", 0, true},
+      {"stencil view, stencil cleared with the depth", 0, true, true},
+      {"normal, stencil cleared with the depth", 0, false, true},
+      {"without blended 3D draws that skip depth writes", wgb::kSkipDecals},
+  };
+}
+
+// After the traced first frame: one experiment per blended no-depth-write draw.
+void AddDrawExperiments() {
+  for (const wgb::DrawSignature& d : wgb::DecalCandidates()) {
+    Experiment e;
+    char label[128];
+    snprintf(label, sizeof(label), "without the draw type=%u first=%u count=%u tex0=%u", d.type, d.first, d.count,
+             d.texture);
+    e.label = label;
+    e.skipDraw = true;
+    e.draw = d;
+    g_experiments.push_back(e);
+  }
+}
+
+void Apply(int step) {
+  const Experiment* e = step >= 0 ? &g_experiments[step] : nullptr;
+  wgb::SetSkip(e ? e->skip : 0);
+  wgb::SetSkipDraw(e && e->skipDraw ? &e->draw : nullptr);
+}
 ULONGLONG g_lastAuto = 0;
 
 // Copies the D3D9 back buffer into system memory (resolving MSAA first).
@@ -130,7 +175,7 @@ void Compare(Image& d3d9, Image& webgpu) {
   WritePng(dir + prefix + L"_d3d9.png", d3d9);
   WritePng(dir + prefix + L"_webgpu.png", webgpu);
   WritePng(dir + prefix + L"_diff.png", diff);
-  Logf("[compare] %03u %ux%u: mean error R %.2f G %.2f B %.2f, %.2f%% pixels off by >16, PSNR %.1f dB\n", g_index, w, h,
+  Logf("[compare] %03u %s%s%ux%u: mean error R %.2f G %.2f B %.2f, %.2f%% pixels off by >16, PSNR %.1f dB\n", g_index, g_label, *g_label ? ", " : "", w, h,
        sum[2] / pixels, sum[1] / pixels, sum[0] / pixels, 100.0 * bad / pixels, psnr);
   const double tilePixels = pixels / (kGrid * kGrid);
   for (int ty = 0; ty < kGrid; ++ty)
@@ -159,16 +204,42 @@ void BeforePresent(IDirect3DDevice9* real, HWND window) {
       g_lastAuto = now;
     }
   }
-  if (!due) return;
+  int step = g_step;
+  if (step < 0 && !due) return;
+  if (config.mirror && step < 0) {
+    // Start the sweep: the next frame is the first experiment.
+    StartExperiments();
+    g_step = 0;
+    Apply(0);
+    CreateDirectoryW(LogPath(L"compare").c_str(), nullptr);  // the trace is written before the first capture
+    wchar_t trace[48];
+    swprintf(trace, 48, L"compare\\%03u_draws.txt", g_index);
+    wgb::RequestTrace(trace);
+    return;
+  }
+  if (step >= 0) {
+    if (step == 0) AddDrawExperiments();
+    g_labelText = g_experiments[step].label;
+    g_label = g_labelText.c_str();
+    g_step = step + 1 < static_cast<int>(g_experiments.size()) ? step + 1 : -1;
+    Apply(g_step);
+  } else {
+    g_label = "";
+  }
   // Without mirror mode the D3D9 device draws nothing: save the WebGPU frame only.
   g_d3d9 = {};
   if (config.mirror && !ReadBackBuffer(real, &g_d3d9)) return;
   g_pending = true;
   wgb::RequestCapture();
-  wchar_t trace[48];
-  swprintf(trace, 48, L"compare\\%03u_draws.txt", g_index);
-  wgb::RequestTrace(trace);
+  if (!config.mirror) {
+    wchar_t trace[48];
+    swprintf(trace, 48, L"compare\\%03u_draws.txt", g_index);
+    wgb::RequestTrace(trace);
+  }
 }
+
+bool StencilView() { return g_step >= 0 && g_experiments[g_step].stencilView; }
+bool ClearStencil() { return g_step >= 0 && g_experiments[g_step].clearStencil; }
 
 void AfterPresent() {
   if (!g_pending) return;

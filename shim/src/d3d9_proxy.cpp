@@ -92,11 +92,11 @@ HRESULT STDMETHODCALLTYPE Direct3D9Proxy::CreateDevice(UINT Adapter, D3DDEVTYPE 
   IDirect3DDevice9* real = nullptr;
   HRESULT hr = real_->CreateDevice(Adapter, DeviceType, focus, BehaviorFlags, &used, &real);
   Logf("[device] CreateDevice adapter=%u type=%u flags=%08lX %ux%u fmt=%s game-windowed=%d depth=%s "
-       "interval=%08X -> %08X\n",
+       "interval=%08X present-flags=%08lX -> %08X\n",
        Adapter, DeviceType, BehaviorFlags, used.BackBufferWidth, used.BackBufferHeight,
        rec::FormatName(used.BackBufferFormat).c_str(), pp->Windowed,
        used.EnableAutoDepthStencil ? rec::FormatName(used.AutoDepthStencilFormat).c_str() : "none",
-       used.PresentationInterval, hr);
+       used.PresentationInterval, used.Flags, hr);
   CopyBack(pp, used);
   rec::LogCaps(real_, Adapter, DeviceType);
   LogFlush();
@@ -114,7 +114,8 @@ HRESULT STDMETHODCALLTYPE Direct3D9Proxy::CreateDevice(UINT Adapter, D3DDEVTYPE 
     if (!mirror::Start(GetConfig().presentWebGPU ? g_window : nullptr, vsync))
       Logf("[webgpu] disabled: startup failed\n");
   }
-  wgb::ResetDevice(used.BackBufferWidth, used.BackBufferHeight, used.EnableAutoDepthStencil);
+  wgb::ResetDevice(used.BackBufferWidth, used.BackBufferHeight, used.EnableAutoDepthStencil,
+                      used.AutoDepthStencilFormat);
   return hr;
 }
 
@@ -160,7 +161,8 @@ HRESULT STDMETHODCALLTYPE DeviceProxy::Reset(D3DPRESENT_PARAMETERS* pp) {
   if (SUCCEEDED(hr)) {
     rec::ResetState(pp->EnableAutoDepthStencil);
     OnBackBuffer(used.BackBufferWidth, used.BackBufferHeight);
-    wgb::ResetDevice(used.BackBufferWidth, used.BackBufferHeight, used.EnableAutoDepthStencil);
+    wgb::ResetDevice(used.BackBufferWidth, used.BackBufferHeight, used.EnableAutoDepthStencil,
+                      used.AutoDepthStencilFormat);
   }
   return hr;
 }
@@ -269,6 +271,7 @@ HRESULT STDMETHODCALLTYPE DeviceProxy::Clear(DWORD Count, CONST D3DRECT* pRects,
                                              float Z, DWORD Stencil) {
   COUNT(Clear);
   if (rec::Enabled()) rec::Resource("Clear flags=%lX rects=%s", Flags, Count ? "yes" : "no");
+  if ((Flags & D3DCLEAR_ZBUFFER) && compare::ClearStencil()) Flags |= D3DCLEAR_STENCIL, Stencil = 0;
   wgb::Clear(Flags, Color, Z, Stencil);
   if (WebGPUOwnsFrame()) return D3D_OK;
   return real_->Clear(Count, pRects, Flags, Color, Z, Stencil);
@@ -327,6 +330,50 @@ HRESULT STDMETHODCALLTYPE DeviceProxy::DrawPrimitive(D3DPRIMITIVETYPE PrimitiveT
                                                      UINT PrimitiveCount) {
   COUNT(DrawPrimitive);
   rec::Draw(rec::kDrawPrimitive, PrimitiveType, PrimitiveCount, SP());
+  static bool inStencilView = false;
+  if (!inStencilView && PrimitiveType == D3DPT_TRIANGLEFAN && compare::StencilView() &&
+      wgb::RenderState(D3DRS_STENCILENABLE) && wgb::RenderState(D3DRS_STENCILFUNC) == D3DCMP_LESSEQUAL) {
+    // The shadow darkening quad: draw it once per stencil band in an opaque colour.
+    // Goes through this proxy so both renderers (and the game's state) see it.
+    inStencilView = true;
+    const D3DRENDERSTATETYPE rsSaved[] = {D3DRS_STENCILFUNC, D3DRS_STENCILREF, D3DRS_ALPHABLENDENABLE,
+                                          D3DRS_ALPHATESTENABLE, D3DRS_TEXTUREFACTOR};
+    const D3DTEXTURESTAGESTATETYPE tssSaved[] = {D3DTSS_COLOROP, D3DTSS_COLORARG1, D3DTSS_ALPHAOP, D3DTSS_ALPHAARG1};
+    DWORD rsValues[std::size(rsSaved)], tssValues[std::size(tssSaved)];
+    for (size_t i = 0; i < std::size(rsSaved); ++i) rsValues[i] = wgb::RenderState(rsSaved[i]);
+    for (size_t i = 0; i < std::size(tssSaved); ++i) tssValues[i] = wgb::TextureStageState(0, tssSaved[i]);
+    SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+    SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+    SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+    SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TFACTOR);
+    SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+    SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TFACTOR);
+    // Test is "ref func stencil"; later bands overwrite earlier ones.
+    struct Band {
+      DWORD func, ref;
+      D3DCOLOR color;
+    };
+    constexpr Band kBands[] = {
+        {D3DCMP_EQUAL, 0, 0xFF000050},       // 0: dark blue
+        {D3DCMP_EQUAL, 1, 0xFFFF0000},       // 1: red
+        {D3DCMP_EQUAL, 2, 0xFF00FF00},       // 2: green
+        {D3DCMP_EQUAL, 3, 0xFFFFFF00},       // 3: yellow
+        {D3DCMP_LESS, 3, 0xFFFF00FF},        // 4+: magenta
+        {D3DCMP_LESSEQUAL, 128, 0xFFFFFFFF}, // 128+ (wrapped below zero): white
+        {D3DCMP_EQUAL, 254, 0xFFFF8000},     // -2: orange
+        {D3DCMP_EQUAL, 255, 0xFF00FFFF},     // -1: cyan
+    };
+    for (const Band& b : kBands) {
+      SetRenderState(D3DRS_STENCILFUNC, b.func);
+      SetRenderState(D3DRS_STENCILREF, b.ref);
+      SetRenderState(D3DRS_TEXTUREFACTOR, b.color);
+      DrawPrimitive(PrimitiveType, StartVertex, PrimitiveCount);
+    }
+    for (size_t i = 0; i < std::size(rsSaved); ++i) SetRenderState(rsSaved[i], rsValues[i]);
+    for (size_t i = 0; i < std::size(tssSaved); ++i) SetTextureStageState(0, tssSaved[i], tssValues[i]);
+    inStencilView = false;
+    return D3D_OK;
+  }
   wgb::DrawPrimitive(PrimitiveType, StartVertex, PrimitiveCount);
   if (WebGPUOwnsFrame()) return D3D_OK;
   return real_->DrawPrimitive(PrimitiveType, StartVertex, PrimitiveCount);

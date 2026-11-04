@@ -16,8 +16,10 @@ namespace agpu::wgb {
 
 bool Active();
 
-// After CreateDevice / Reset: D3D state is back to defaults.
-void ResetDevice(UINT backBufferWidth, UINT backBufferHeight, BOOL autoDepthStencil);
+// After CreateDevice / Reset: D3D state is back to defaults. `depthFormat` is the
+// D3D9 auto depth-stencil format: without stencil bits (D16, the game's choice in
+// 16-bit video modes) D3D9 passes every stencil test, and so does the backend.
+void ResetDevice(UINT backBufferWidth, UINT backBufferHeight, BOOL autoDepthStencil, D3DFORMAT depthFormat);
 
 // Resources (proxies from resources.h).
 void TextureCreated(ResourceProxy* texture, UINT width, UINT height, UINT levels, DWORD usage, D3DFORMAT format);
@@ -71,6 +73,32 @@ void MovieStarting();
 // Comparison harness: the next Present also reads the WebGPU back buffer back.
 void RequestCapture();
 bool TakeCapture(std::vector<uint8_t>* bgra, UINT* width, UINT* height);
+// Comparison experiments: groups of draws the WebGPU renderer leaves out (from the
+// next frame on) so a capture shows whether they cause a difference.
+enum : unsigned {
+  kSkipStencilQuad = 1,       // pretransformed draws with stencil test (shadow darkening)
+  kSkipStencilVolumes = 2,    // 3D draws with stencil test (shadow volumes)
+  kSkipShadowTextures = 4,    // 3D draws textured with a render target (realtime shadows)
+  kSkipAdditive = 8,          // 3D draws blending with DESTBLEND=ONE (light pools, glows)
+  kSkipDecals = 16,           // 3D blended draws without depth writes or stencil (decals, shadows)
+  kSkipFades = 64,            // 3D blends whose stage 1 is MODULATE(CURRENT, TFACTOR) (distance fades)
+  kClearStencil = 32,         // start each frame's stencil at zero (D3D9 keeps it: test only)
+};
+void SetSkip(unsigned mask);
+// Identifies a draw across frames (same geometry, texture and type).
+struct DrawSignature {
+  UINT type = 0, first = 0, count = 0, texture = 0;
+  bool operator==(const DrawSignature&) const = default;
+};
+// Blended 3D draws without depth writes or stencil (minus TFACTOR fades) seen in the
+// last traced frame, one entry per signature.
+std::vector<DrawSignature> DecalCandidates();
+// Leaves out draws matching `sig` from the next frame on (nullptr: none).
+void SetSkipDraw(const DrawSignature* sig);
+// Current D3D render state as the WebGPU backend tracked it.
+DWORD RenderState(D3DRENDERSTATETYPE state);
+DWORD TextureStageState(DWORD stage, D3DTEXTURESTAGESTATETYPE type);
+
 // Writes every draw of the next frame to andreasgpu_logs/<name>.
 void RequestTrace(const wchar_t* name);
 

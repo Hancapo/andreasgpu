@@ -22,6 +22,10 @@ const Config& GetConfig() {
     c.record = GetPrivateProfileIntW(L"renderer", L"record", 0, ini.c_str()) != 0;
     c.mirror = !c.presentWebGPU && GetPrivateProfileIntW(L"renderer", L"mirror", 0, ini.c_str()) != 0;
     c.fps = GetPrivateProfileIntW(L"renderer", L"fps", 1, ini.c_str()) != 0;
+    wchar_t toggles[256] = {};
+    GetPrivateProfileStringW(L"renderer", L"dawn_toggles", L"", toggles, 256, ini.c_str());
+    for (const wchar_t* t = toggles; *t; ++t) c.dawnToggles += static_cast<char>(*t);
+    c.validation = GetPrivateProfileIntW(L"renderer", L"validation", 0, ini.c_str()) != 0;
     c.profile = GetPrivateProfileIntW(L"renderer", L"profile", 0, ini.c_str()) != 0;
     c.compareSeconds = GetPrivateProfileIntW(L"renderer", L"compare", 0, ini.c_str());
     return c;
