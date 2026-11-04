@@ -71,11 +71,18 @@ sees with:
 
 - a **pass**: `main`, `mirror` (CMirrors' 1024x512 reflection, which re-renders the scene) or
   `shadowmap` (realtime ped/vehicle shadow textures);
-- a **category**: `sky`, `building`, `road`, `vehicle`, `ped`, `object`, `water`, `shadow`,
-  `vegetation`, `effects`, `weather`, `reflection`, `postfx`, `hud`, `menu`, or `unknown`.
-  Entities get theirs from the entity type, so a car drawn by the generic entity loop is `vehicle`.
+- a **category**: `sky`, `clouds` (the game's clouds, moon and stars), `building`, `road`,
+  `vehicle`, `ped`, `object`, `water`, `shadow`, `vegetation`, `effects`, `weather`, `reflection`,
+  `postfx`, `hud`, `menu`, or `unknown`. Entities get theirs from the entity type, so a car drawn
+  by the generic entity loop is `vehicle`.
 
-Every 600 frames the log prints `[phase] draws/frame:` per pass and category.
+Every 600 frames the log prints `[phase] draws/frame:` per pass and category. A scene-done
+callback runs right after the main RenderScene (world, water and shadows drawn; effects and HUD
+not yet).
+
+The hooks coexist with ASI mods (CLEO, modloader plugins...): when another mod has already
+redirected one of these calls, the hook chains after it, calling the mod's function, which calls
+the game's. The log lists those as `chained after another mod's hook`.
 
 **Game data:** every frame the backend reads the game's own state (`shim/src/game_data.cpp`) into a
 uniform that every generated shader declares as `game` (`@group(0) @binding(10)`): time of day,

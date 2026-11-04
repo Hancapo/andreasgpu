@@ -10,7 +10,10 @@ namespace agpu {
 
 // Redirects one `call rel32` (E8) or tail `jmp rel32` (E9) instruction to
 // `replacement`. The original target must be `expectedTarget` and must start with
-// `guard` bytes.
+// `guard` bytes (or with a `jmp` another mod put there).
+// With `previous` set, a site another mod already redirected is accepted too: the
+// hook chains, and *previous receives what the site called (call it, not the
+// original, from the replacement).
 struct CallSiteHook {
   const char* name;
   uintptr_t site;
@@ -18,6 +21,7 @@ struct CallSiteHook {
   const uint8_t* guard;
   size_t guardSize;
   void* replacement;
+  uintptr_t* previous = nullptr;
 };
 
 // Replaces `size` bytes at `address`; the current bytes must equal `expected`.

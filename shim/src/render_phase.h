@@ -19,7 +19,8 @@ enum class Pass : uint8_t {
 // What the draws are.
 enum class Category : uint8_t {
   Unknown,     // outside any hooked phase
-  Sky,         // horizon gradient, clouds
+  Sky,         // horizon gradient, sky background
+  Clouds,      // CClouds::Render and the clouds seen from below (also moon and stars)
   Building,    // map geometry (CBuilding), fading and underwater entities
   Road,        // CRenderer::RenderRoads
   Vehicle,
@@ -41,6 +42,10 @@ Pass CurrentPass();
 Category CurrentCategory();
 const char* Name(Pass pass);
 const char* Name(Category category);
+
+// Called right after the main frame's RenderScene returns (all world geometry,
+// water and shadows drawn; effects and HUD not yet). Not called for mirror passes.
+void SetSceneDoneCallback(void (*callback)());
 
 // Installs the phase hooks (after the build check).
 void InstallHooks();
