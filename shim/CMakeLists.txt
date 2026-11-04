@@ -20,6 +20,7 @@ add_library(agpu_d3d9 SHARED
   src/compare.cpp
   src/call_profile.cpp
   src/render_phase.cpp
+  src/game_data.cpp
   src/webgpu/ffshader.cpp
   src/webgpu/shader_translator.cpp
 )

@@ -24,6 +24,7 @@
 
 #include "call_profile.h"
 #include "config.h"
+#include "game_data.h"
 #include "log.h"
 #include "render_phase.h"
 #include "resources.h"
@@ -271,6 +272,8 @@ struct Backend {
   wgpu::RenderPipeline blitPipeline;
   wgpu::BindGroupLayout blitLayout;
   wgpu::Sampler blitSampler;
+  wgpu::Buffer gameBuffer;  // game::Data, binding 10, written once per frame
+  game::Data gameData{};
   wgpu::Texture gammaRamp;  // 256x1, the D3D9 gamma ramp (identity until the game sets one)
   wgpu::TextureView gammaView;
 
@@ -453,8 +456,13 @@ void CreateTargets(UINT width, UINT height) {
   g->depthView = g->depth.CreateView();
 }
 
+// Bindings: 0 uniforms, 1..2k textures and samplers, 2k+1 VS constants, 2k+2 game data.
+constexpr int kBindEntries = 3 + 2 * kMaxTextureSlots;
+constexpr uint32_t kGameBinding = 2 + 2 * kMaxTextureSlots;
+static_assert(kGameBinding == 10, "the WGSL prelude declares `game` at binding 10");
+
 void CreateFixedObjects() {
-  constexpr int kEntries = 2 + 2 * kMaxTextureSlots;
+  constexpr int kEntries = kBindEntries;
   wgpu::BindGroupLayoutEntry entries[kEntries] = {};
   entries[0].binding = 0;
   entries[0].visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
@@ -470,11 +478,19 @@ void CreateFixedObjects() {
     entries[2 + 2 * i].visibility = wgpu::ShaderStage::Fragment;
     entries[2 + 2 * i].sampler.type = wgpu::SamplerBindingType::Filtering;
   }
-  entries[kEntries - 1].binding = 1 + 2 * kMaxTextureSlots;
-  entries[kEntries - 1].visibility = wgpu::ShaderStage::Vertex;
+  entries[kEntries - 2].binding = 1 + 2 * kMaxTextureSlots;
+  entries[kEntries - 2].visibility = wgpu::ShaderStage::Vertex;
+  entries[kEntries - 2].buffer.type = wgpu::BufferBindingType::Uniform;
+  entries[kEntries - 2].buffer.hasDynamicOffset = true;
+  entries[kEntries - 2].buffer.minBindingSize = kVertexConstantsSize;
+  entries[kEntries - 1].binding = kGameBinding;
+  entries[kEntries - 1].visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
   entries[kEntries - 1].buffer.type = wgpu::BufferBindingType::Uniform;
-  entries[kEntries - 1].buffer.hasDynamicOffset = true;
-  entries[kEntries - 1].buffer.minBindingSize = kVertexConstantsSize;
+  entries[kEntries - 1].buffer.minBindingSize = sizeof(game::Data);
+  wgpu::BufferDescriptor gameDesc{};
+  gameDesc.size = sizeof(game::Data);
+  gameDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+  g->gameBuffer = g->device.CreateBuffer(&gameDesc);
   wgpu::BindGroupLayoutDescriptor layoutDesc{};
   layoutDesc.entryCount = kEntries;
   layoutDesc.entries = entries;
@@ -1097,14 +1113,17 @@ wgpu::BindGroup GetBindGroup(const FixedFunctionKey& ff) {
   }
   auto it = g->bindGroups.find(key);
   if (it != g->bindGroups.end()) return it->second;
-  constexpr int kEntries = 2 + 2 * kMaxTextureSlots;
+  constexpr int kEntries = kBindEntries;
   wgpu::BindGroupEntry entries[kEntries] = {};
   entries[0].binding = 0;
   entries[0].buffer = g->uniformRing;
   entries[0].size = sizeof(UniformBlock);
-  entries[kEntries - 1].binding = 1 + 2 * kMaxTextureSlots;
-  entries[kEntries - 1].buffer = g->uniformRing;
-  entries[kEntries - 1].size = kVertexConstantsSize;
+  entries[kEntries - 2].binding = 1 + 2 * kMaxTextureSlots;
+  entries[kEntries - 2].buffer = g->uniformRing;
+  entries[kEntries - 2].size = kVertexConstantsSize;
+  entries[kEntries - 1].binding = kGameBinding;
+  entries[kEntries - 1].buffer = g->gameBuffer;
+  entries[kEntries - 1].size = sizeof(game::Data);
   for (int i = 0; i < kMaxTextureSlots; ++i) {
     entries[1 + 2 * i].binding = 1 + 2 * i;
     entries[1 + 2 * i].textureView = views[i];
@@ -1675,6 +1694,19 @@ void ReadBackFrame() {
   g->captureHeight = g->height;
 }
 
+// One line of the frame's game data (log and trace header).
+std::string DescribeGameData() {
+  const game::Data& gd = g->gameData;
+  char line[320];
+  snprintf(line, sizeof(line),
+           "%02d:%02d weather %.0f->%.0f (%.2f) rain %.2f wet %.2f wind %.2f underwater %.2f area %.0f | "
+           "sun (%.2f %.2f %.2f) camera (%.1f %.1f %.1f) | t=%.1f s step %.2f",
+           static_cast<int>(gd.time[0]), static_cast<int>(gd.time[0] * 60) % 60, gd.weather[0], gd.weather[1],
+           gd.weather[2], gd.weather[3], gd.env[0], gd.env[1], gd.env[2], gd.env[3], gd.sun[0], gd.sun[1], gd.sun[2],
+           gd.camera[0], gd.camera[1], gd.camera[2], gd.time[1], gd.time[2]);
+  return line;
+}
+
 // Records the blit (if the window can present), uploads the rings and submits.
 void SubmitFrame() {
   EnsureEncoder();
@@ -1715,6 +1747,9 @@ void SubmitFrame() {
   }
   wgpu::CommandBuffer commands = g->encoder.Finish();
   g->encoder = nullptr;
+  // Game state for this frame's draws (queue writes land before the submit).
+  game::Read(&g->gameData);
+  g->queue.WriteBuffer(g->gameBuffer, 0, &g->gameData, sizeof(g->gameData));
   if (!g->uniformData.empty()) g->queue.WriteBuffer(g->uniformRing, 0, g->uniformData.data(), g->uniformData.size());
   if (!g->vertexData.empty()) g->queue.WriteBuffer(g->vertexRing, 0, g->vertexData.data(), g->vertexData.size());
   g->queue.Submit(1, &commands);
@@ -2331,6 +2366,7 @@ void ReportProfile(LARGE_INTEGER now, LARGE_INTEGER freq) {
 void Present() {
   if (!Active()) return;
   if (g->tracing) {
+    g->trace.insert(0, "# game " + DescribeGameData() + "\n");
     WriteLogFile(g->traceName.c_str(), g->trace.data(), g->trace.size());
     Logf("[trace] %u draws written to %ls\n", g->traceDraw, g->traceName.c_str());
     g->tracing = false;
@@ -2405,6 +2441,7 @@ void Present() {
       }
     }
     Logf("%s\n", phases.c_str());
+    Logf("[game] %s\n", DescribeGameData().c_str());
     std::memset(g->phaseDraws, 0, sizeof(g->phaseDraws));
     if (g_prof.on) ReportProfile(now, freq);
     LogFlush();

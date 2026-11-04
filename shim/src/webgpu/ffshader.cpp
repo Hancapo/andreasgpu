@@ -46,6 +46,15 @@ const char* kUniforms = R"(struct U {
 @group(0) @binding(7) var t3Tex: texture_2d<f32>;
 @group(0) @binding(8) var s3: sampler;
 @group(0) @binding(9) var<uniform> vc: array<vec4f, 256>;
+// Game state for this frame (game_data.h).
+struct Game {
+  time: vec4f,     // hours of day, game seconds, time step, frame counter
+  weather: vec4f,  // old type, new type, blend, rain
+  env: vec4f,      // wet roads, wind, underwater, area
+  sun: vec4f,      // direction to the sun (world)
+  camera: vec4f,   // camera position (world)
+};
+@group(0) @binding(10) var<uniform> game: Game;
 
 struct VOut {
   @builtin(position) pos: vec4f,

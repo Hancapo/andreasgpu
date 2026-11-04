@@ -77,6 +77,12 @@ sees with:
 
 Every 600 frames the log prints `[phase] draws/frame:` per pass and category.
 
+**Game data:** every frame the backend reads the game's own state (`shim/src/game_data.cpp`) into a
+uniform that every generated shader declares as `game` (`@group(0) @binding(10)`): time of day,
+game time, time step and frame counter; old/new weather and their blend, rain; wet roads, wind,
+underwater amount and the current area; the direction to the sun; the camera position. The log
+prints it as `[game]` lines and each frame trace starts with it.
+
 ## Display fixes (in the shim)
 
 - **Borderless:** the game's exclusive fullscreen becomes a windowed D3D9 device on a borderless
