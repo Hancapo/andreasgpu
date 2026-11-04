@@ -38,3 +38,12 @@ add_executable(agpu_dawn_smoke tests/dawn_smoke.cpp)
 target_link_libraries(agpu_dawn_smoke PRIVATE dawn_webgpu dbghelp)
 add_custom_command(TARGET agpu_dawn_smoke POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${DAWN_RUNTIME_FILES} $<TARGET_FILE_DIR:agpu_dawn_smoke>)
+
+# Offline check of the volumetric clouds: compiles their pipelines on a headless
+# device and renders fixed scenes to PNG (tests/clouds_test.cpp).
+add_executable(agpu_clouds_test tests/clouds_test.cpp shim/src/webgpu/clouds.cpp shim/src/webgpu/atmosphere.cpp
+               shim/src/log.cpp)
+target_include_directories(agpu_clouds_test PRIVATE shim/src)
+target_link_libraries(agpu_clouds_test PRIVATE dawn_webgpu windowscodecs ole32)
+add_custom_command(TARGET agpu_clouds_test POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different ${DAWN_RUNTIME_FILES} $<TARGET_FILE_DIR:agpu_clouds_test>)
