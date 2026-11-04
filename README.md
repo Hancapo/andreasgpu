@@ -57,11 +57,25 @@ mean errors to `andreasgpu.log`. With `present=webgpu`, F10 saves `NNN_webgpu.pn
 In mirror mode F10 runs a sweep over the next ~20 frames, one capture each: the normal frame, a
 stencil view in both renderers (the game's shadow darkening quad is redrawn once per stencil value
 in a solid colour), the same after clearing the stencil with the depth, and WebGPU frames that each
-leave out one blended draw that skips depth writes. Labels are in the `[compare]` log lines.
+leave out one draw category (below). Labels are in the `[compare]` log lines.
 
 **Frame trace:** every F10 also writes `compare\NNN_draws.txt`: each draw and clear of the next
-frame with its outcome (drawn, compiling, skipped), primitive, first vertex position, depth, blend,
-alpha-test and stencil state, texture and viewport.
+frame with its outcome (drawn, compiling, skipped), pass and category, primitive, first vertex
+position, depth, blend, alpha-test and stencil state, texture and viewport.
+
+## Draw categories (base for mods)
+
+Call-site hooks around the game's render phases (`shim/src/render_phase.cpp`: Idle, RenderScene,
+RenderEffects, FrontendIdle and `CRenderer::RenderOneNonRoad`) tag every draw the WebGPU backend
+sees with:
+
+- a **pass**: `main`, `mirror` (CMirrors' 1024x512 reflection, which re-renders the scene) or
+  `shadowmap` (realtime ped/vehicle shadow textures);
+- a **category**: `sky`, `building`, `road`, `vehicle`, `ped`, `object`, `water`, `shadow`,
+  `vegetation`, `effects`, `weather`, `reflection`, `postfx`, `hud`, `menu`, or `unknown`.
+  Entities get theirs from the entity type, so a car drawn by the generic entity loop is `vehicle`.
+
+Every 600 frames the log prints `[phase] draws/frame:` per pass and category.
 
 ## Display fixes (in the shim)
 
